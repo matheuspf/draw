@@ -135,6 +135,7 @@ class VQAEvaluator:
         self.letters = string.ascii_uppercase
         self.model_path = kagglehub.model_download(
             'google/paligemma-2/transformers/paligemma2-10b-mix-448'
+            # 'google/paligemma-2/transformers/paligemma2-3b-mix-224'
         )
         self.processor = AutoProcessor.from_pretrained(self.model_path)
         self.model = PaliGemmaForConditionalGeneration.from_pretrained(
@@ -544,8 +545,8 @@ class ImageProcessor:
     def apply(self):
         """Apply an ensemble of defenses."""
         return (
-            self.apply_random_crop_resize(crop_percent=0.03)
-            .apply_jpeg_compression(quality=95)
+            # self.apply_random_crop_resize(crop_percent=0.03)
+            self.apply_jpeg_compression(quality=95)
             .apply_median_filter(size=9)
             .apply_fft_low_pass(cutoff_frequency=0.5)
             .apply_bilateral_filter(d=5, sigma_color=75, sigma_space=75)
