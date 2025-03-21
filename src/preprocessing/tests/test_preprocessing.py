@@ -1,4 +1,5 @@
 from src.preprocessing.torch_preprocessing import apply_preprocessing_torch
+import time
 from PIL import Image
 import cv2
 import torch
@@ -8,8 +9,8 @@ from src.score_original import ImageProcessor
 
 def test_preprocessing():
 
-    img_org = cv2.imread("/home/mpf/Downloads/tt1.png")
-    # img_org = cv2.imread("/home/mpf/code/kaggle/draw_bkp/C.png")
+    # img_org = cv2.imread("/home/mpf/Downloads/tt1.png")
+    img_org = cv2.imread("/home/mpf/code/kaggle/draw_bkp/C.png")
 
     
     processor = ImageProcessor(image=Image.fromarray(img_org))
@@ -26,7 +27,12 @@ def test_preprocessing():
     img = cv2.cvtColor(img_org, cv2.COLOR_BGR2RGB)
     img = torch.tensor(img, dtype=torch.float32).permute(2, 0, 1) / 255.0
 
-    img = apply_preprocessing_torch(img)
+    start = time.time()
+
+    img = apply_preprocessing_torch(img.to("cuda")).cpu()
+
+    end = time.time()
+    print(f"Time taken: {end - start} seconds")
 
 
     img = (img * 255).permute(1, 2, 0).numpy().round().clip(0, 255).astype(np.uint8)
