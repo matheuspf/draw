@@ -4,11 +4,19 @@ import cv2
 
 import numpy as np
 import torch
-from src.score_original import VQAEvaluator, ImageProcessor
+from src.score_original import VQAEvaluator, ImageProcessor, AestheticEvaluator
 from src.preprocessing import apply_preprocessing_torch
 from PIL import Image
 from torch.nn import functional as F
-from src.score_gradient import vqa_score_original, vqa_score_gradient
+from src.score_gradient import (
+    vqa_score_original,
+    vqa_score_gradient,
+    aesthetic_score_gradient,
+    aesthetic_score_original,
+    score_original,
+    score_gradient,
+)
+
 
 def test_image_inputs():
     with_preprocessing = True
@@ -120,4 +128,101 @@ def test_vqa_score_gradient():
     print(f"mean_distance: {mean_distance}")
 
 
-test_vqa_score_gradient()
+def test_aesthetic_score_gradient():
+    evaluator = AestheticEvaluator()
+
+    image_list = [
+        "/home/mpf/code/kaggle/draw/org.png",
+        "/home/mpf/code/kaggle/draw/processed.png",
+        "/home/mpf/code/vision/base.png",
+    ]
+
+    mean_distance = 0.0
+
+    for image_path in image_list:
+        org_image = Image.open(image_path)
+        image_processor = ImageProcessor(copy.deepcopy(org_image))
+        image_processor.apply()
+        image = image_processor.image
+
+        original_score = aesthetic_score_original(evaluator, image)
+
+        torch_image = torch.tensor(np.array(org_image), dtype=torch.float32, device="cuda:0")
+        torch_image = (torch_image / 255.0).permute(2, 0, 1)
+
+        torch_image = apply_preprocessing_torch(torch_image)
+        gradient_score = aesthetic_score_gradient(evaluator, torch_image).item()
+
+        diff = np.abs(original_score - gradient_score)
+
+        print(f"image_path: {image_path}")
+        print(f"original_score: {original_score}")
+        print(f"gradient_score: {gradient_score}")
+        print(f"diff: {diff}")
+        print("-" * 30)
+
+        mean_distance += diff / len(image_list)
+
+
+def test_score_gradient():
+    vqa_evaluator = VQAEvaluator()
+    aesthetic_evaluator = AestheticEvaluator()
+
+    description = "a purple forest at dusk"
+    question = "What is the main setting of the image?"
+    choices = ["beach", "desert", "forest", "mountain"]
+    answer = "forest"
+
+    mean_distance = 0.0
+
+    image_list = [
+        "/home/mpf/code/kaggle/draw/org.png",
+        "/home/mpf/code/kaggle/draw/processed.png",
+        "/home/mpf/code/vision/base.png",
+        "/home/mpf/code/label_studio/examples_poe2/poe_0.jpg",
+        "/home/mpf/code/label_studio/examples_poe2/poe_1.jpg",
+        "/home/mpf/code/label_studio/examples_poe2/poe_2.jpg",
+        "/home/mpf/code/label_studio/examples_poe2/poe_3.jpg",
+        "/home/mpf/code/label_studio/examples_poe2/poe_4.jpg",
+        "/home/mpf/code/label_studio/examples_poe2/poe_5.jpg",
+        "/home/mpf/Downloads/f1.jpeg",
+        "/home/mpf/Downloads/f2.jpg",
+        "/home/mpf/Downloads/f3.jpg",
+    ]
+
+    for image_path in image_list:
+        org_image = Image.open(image_path)
+
+        image_processor = ImageProcessor(copy.deepcopy(org_image))
+        image_processor.apply()
+        image = image_processor.image
+
+        original_score, _, _ = score_original(
+            vqa_evaluator, aesthetic_evaluator, image, [question], [choices], [answer]
+        )
+
+        torch_image = torch.tensor(np.array(org_image), dtype=torch.float32, device="cuda:0")
+        torch_image = (torch_image / 255.0).permute(2, 0, 1)
+
+        torch_image = apply_preprocessing_torch(torch_image)
+        gradient_score, _, _ = score_gradient(
+            vqa_evaluator, aesthetic_evaluator, torch_image, [question], [choices], [answer]
+        )
+
+        diff = np.abs(original_score - gradient_score.item())
+
+        print(f"image_path: {image_path}")
+        print(f"original_score: {original_score}")
+        print(f"gradient_score: {gradient_score.item()}")
+        print(f"diff: {diff}")
+        print("-" * 30)
+
+        mean_distance += diff / len(image_list)
+
+    print("\n\n")
+    print(f"mean_distance: {mean_distance}")
+
+
+# test_vqa_score_gradient()
+# test_aesthetic_score_gradient()
+test_score_gradient()

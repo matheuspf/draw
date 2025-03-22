@@ -11,8 +11,8 @@ from lxml import etree
 from transformers import AutoProcessor, AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.models.siglip.modeling_siglip import SiglipModel
 from transformers.models.siglip.processing_siglip import SiglipProcessor
-from src.score_original import VQAEvaluator, ImageProcessor
-from src.score_gradient import vqa_score_original, vqa_score_gradient
+from src.score_original import VQAEvaluator, ImageProcessor, AestheticEvaluator
+from src.score_gradient import score_original, score_gradient
 from src.preprocessing import apply_preprocessing_torch
 
 
@@ -71,7 +71,8 @@ def torch_to_pil(image: torch.Tensor) -> Image.Image:
 
 
 def optimize_pixel_wise(
-    evaluator: VQAEvaluator,
+    vqa_evaluator: VQAEvaluator,
+    aesthetic_evaluator: AestheticEvaluator,
     description: str,
     questions: list[str],
     choices_list: list[list[str]],
@@ -82,8 +83,12 @@ def optimize_pixel_wise(
     weight_decay: float = 0.0,
     validation_steps: int = 10,
 ) -> Image.Image:
-    evaluator.model.eval()
-    evaluator.model.requires_grad_(False)
+    vqa_evaluator.model.eval()
+    vqa_evaluator.model.requires_grad_(False)
+    aesthetic_evaluator.predictor.eval()
+    aesthetic_evaluator.predictor.requires_grad_(False)
+    aesthetic_evaluator.clip_model.eval()
+    aesthetic_evaluator.clip_model.requires_grad_(False)
 
     image = get_initial_image(image_shape)
 
@@ -95,13 +100,14 @@ def optimize_pixel_wise(
     for iter_idx in range(num_iterations):
         optimizer.zero_grad()
         image_preproc = apply_preprocessing_torch(image)
-        loss = -vqa_score_gradient(evaluator, image_preproc, questions, choices_list, answers)
+        loss, _, _ = score_gradient(vqa_evaluator, aesthetic_evaluator, image_preproc, questions, choices_list, answers)
+        loss = -loss
         loss.backward()
         optimizer.step()
 
         if iter_idx == 0 or (iter_idx + 1) % validation_steps == 0:
             pil_image = ImageProcessor(torch_to_pil(image)).apply().image
-            val_loss = vqa_score_original(evaluator, pil_image, questions, choices_list, answers)
+            val_loss, _, _ = score_original(vqa_evaluator, aesthetic_evaluator, pil_image, questions, choices_list, answers)
             loss_diff = np.abs(-loss.item() - val_loss)
 
         pbar.set_description(
@@ -118,11 +124,10 @@ def optimize_pixel_wise(
 
 
 if __name__ == "__main__":
-    evaluator = VQAEvaluator()
-    
+    vqa_evaluator = VQAEvaluator()
+    aesthetic_evaluator = AestheticEvaluator()
 
     
-
     description = "a yellow forest at dusk"
     questions = [
         # "What is the main setting of the image?",
@@ -148,13 +153,14 @@ if __name__ == "__main__":
 
     image = Image.open("output.png").resize((384, 384))
     image = ImageProcessor(image).apply().image
-    score = vqa_score_original(evaluator, image, questions, choices_list, answers)
+    score, _, _ = score_original(vqa_evaluator, aesthetic_evaluator, image, questions, choices_list, answers)
     print(f"Score: {score}")
     exit()
 
 
     image = optimize_pixel_wise(
-        evaluator=evaluator,
+        vqa_evaluator=vqa_evaluator,
+        aesthetic_evaluator=aesthetic_evaluator,
         description=description,
         questions=questions,
         choices_list=choices_list,

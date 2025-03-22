@@ -1,9 +1,27 @@
 import string
 
 import torch
-from src.score_original import VQAEvaluator
+from src.score_original import VQAEvaluator, AestheticEvaluator, harmonic_mean
 from PIL import Image
 from torch.nn import functional as F
+
+
+def harmonic_mean_grad(a: float, b: float, beta: float = 1.0) -> float:
+    return (1 + beta**2) * (a * b) / (beta**2 * a + b)
+
+
+def score_original(
+    vqa_evaluator: VQAEvaluator,
+    aesthetic_evaluator: AestheticEvaluator,
+    image: Image.Image,
+    questions: list[str],
+    choices_list: list[list[str]],
+    answers: list[str],
+) -> float:
+    vqa_score = vqa_score_original(vqa_evaluator, image, questions, choices_list, answers)
+    aesthetic_score = aesthetic_score_original(aesthetic_evaluator, image)
+    score = harmonic_mean(vqa_score, aesthetic_score, beta=0.5)
+    return score, vqa_score, aesthetic_score
 
 
 def vqa_score_original(
@@ -19,6 +37,13 @@ def vqa_score_original(
         answers=answers,
         image=image,
     )
+
+def aesthetic_score_original(
+    evaluator: AestheticEvaluator,
+    image: Image.Image,
+) -> float:
+    return evaluator.score(image=image)
+
 
 
 def _check_inputs(evaluator: VQAEvaluator, choices_list: list[list[str]], answers: list[str]):
@@ -68,6 +93,24 @@ def _get_choice_tokens(evaluator: VQAEvaluator) -> torch.Tensor:
     )
 
     return first_token, first_token_with_space
+
+
+
+def aesthetic_score_gradient(
+    evaluator: AestheticEvaluator,
+    image: torch.Tensor,
+) -> torch.Tensor:
+    image = F.interpolate(
+        image.unsqueeze(0), size=(224, 224), mode="bicubic", align_corners=False, antialias=True
+    )
+    image = (
+        image
+        - torch.tensor([0.48145466, 0.4578275, 0.40821073], device=image.device).view(1, 3, 1, 1)
+    ) / torch.tensor([0.26862954, 0.26130258, 0.27577711], device=image.device).view(1, 3, 1, 1)
+    image_features = evaluator.clip_model.encode_image(image)
+    image_features_norm = (image_features / image_features.norm(dim=-1, keepdim=True)).float()
+    score = evaluator.predictor(image_features_norm) / 10.0  # scale to [0, 1]
+    return score
 
 
 def vqa_score_gradient(
@@ -120,3 +163,15 @@ def vqa_score_gradient(
 
     return answer_probability
 
+def score_gradient(
+    vqa_evaluator: VQAEvaluator,
+    aesthetic_evaluator: AestheticEvaluator,
+    image: torch.Tensor,
+    questions: list[str],
+    choices_list: list[list[str]],
+    answers: list[str],
+) -> torch.Tensor:
+    vqa_score_grad = vqa_score_gradient(vqa_evaluator, image, questions, choices_list, answers)
+    aesthetic_score_grad = aesthetic_score_gradient(aesthetic_evaluator, image)
+    score_grad = harmonic_mean_grad(vqa_score_grad, aesthetic_score_grad, beta=0.5)
+    return score_grad, vqa_score_grad, aesthetic_score_grad
