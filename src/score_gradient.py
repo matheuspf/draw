@@ -1,0 +1,122 @@
+import string
+
+import torch
+from src.score_original import VQAEvaluator
+from PIL import Image
+from torch.nn import functional as F
+
+
+def vqa_score_original(
+    evaluator: VQAEvaluator,
+    image: Image.Image,
+    questions: list[str],
+    choices_list: list[list[str]],
+    answers: list[str],
+) -> float:
+    return evaluator.score(
+        questions=questions,
+        choices=choices_list,
+        answers=answers,
+        image=image,
+    )
+
+
+def _check_inputs(evaluator: VQAEvaluator, choices_list: list[list[str]], answers: list[str]):
+    for choices, answer in zip(choices_list, answers):
+        if not answer or not choices:
+            raise ValueError(f"Invalid answer format: |{answer}|, possible choices: |{choices}|")
+
+        if not answer in choices:
+            raise ValueError(f"Invalid answer format: |{answer}|, possible choices: |{choices}|")
+
+        try:
+            first_token, first_token_with_space = _get_choice_tokens(evaluator)
+        except ValueError as e:
+            raise ValueError(f"Invalid token mapping at get_choice_tokens: {e}")
+
+        if first_token.min() < 0 or first_token.max() >= evaluator.processor.tokenizer.vocab_size:
+            raise ValueError(f"Invalid first token: {first_token}")
+
+        if (
+            first_token_with_space.min() < 0
+            or first_token_with_space.max() >= evaluator.processor.tokenizer.vocab_size
+        ):
+            raise ValueError(f"Invalid first token with space: {first_token_with_space}")
+
+        decode_string = evaluator.processor.tokenizer.decode(first_token)
+        decode_string_with_space = evaluator.processor.tokenizer.decode(first_token_with_space)
+
+        assert decode_string == string.ascii_uppercase
+        assert decode_string_with_space == " " + " ".join(string.ascii_uppercase)
+
+
+def _get_choice_tokens(evaluator: VQAEvaluator) -> torch.Tensor:
+    letters = string.ascii_uppercase
+    first_token = torch.tensor(
+        [
+            evaluator.processor.tokenizer.encode(letter_token, add_special_tokens=False)[0]
+            for letter_token in letters
+        ],
+        dtype=torch.long,
+    )
+    first_token_with_space = torch.tensor(
+        [
+            evaluator.processor.tokenizer.encode(" " + letter_token, add_special_tokens=False)[0]
+            for letter_token in letters
+        ],
+        dtype=torch.long,
+    )
+
+    return first_token, first_token_with_space
+
+
+def vqa_score_gradient(
+    evaluator: VQAEvaluator,
+    image: torch.Tensor,
+    questions: list[str],
+    choices_list: list[list[str]],
+    answers: list[str],
+) -> torch.Tensor:
+    _check_inputs(evaluator, choices_list, answers)
+
+    image_shape = (
+        evaluator.processor.image_processor.size["height"],
+        evaluator.processor.image_processor.size["width"],
+    )
+    image = F.interpolate(
+        image.unsqueeze(0), size=image_shape, mode="bicubic", align_corners=False, antialias=True
+    )
+    image = (image - 0.5) / 0.5
+
+    prompts = [evaluator.format_prompt(question, choice) for question, choice in zip(questions, choices_list)]
+    inputs = evaluator.processor(
+        images=Image.new("RGB", image_shape),
+        # images=Image.open("/home/mpf/code/kaggle/draw/org.png"),
+        text=prompts,
+        return_tensors="pt",
+        padding="longest",
+    ).to("cuda:0")
+    inputs["pixel_values"] = image.repeat(len(prompts), 1, 1, 1)
+
+    outputs = evaluator.model(**inputs)
+    logits = outputs.logits[:, -1, :]
+
+    first_token, first_token_with_space = _get_choice_tokens(evaluator)
+
+    masked_logits = torch.full_like(logits, float("-inf"))
+    masked_logits[:, first_token] = logits[:, first_token]
+    masked_logits[:, first_token_with_space] = logits[:, first_token_with_space]
+    probabilities = torch.softmax(masked_logits, dim=-1)
+
+    choice_probabilities = probabilities[:, first_token] + probabilities[:, first_token_with_space]
+    total_prob = torch.sum(choice_probabilities, dim=-1, keepdim=True)
+
+    choice_probabilities = choice_probabilities / total_prob
+
+    answer_index = torch.tensor([choices.index(answer) for choices, answer in zip(choices_list, answers)])
+    arange_index = torch.arange(len(answers))
+    answer_probability = choice_probabilities[arange_index, answer_index]
+    answer_probability = answer_probability.mean()
+
+    return answer_probability
+
