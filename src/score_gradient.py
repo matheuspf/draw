@@ -1,7 +1,8 @@
 import string
 
 import torch
-from src.score_original import VQAEvaluator, AestheticEvaluator, harmonic_mean
+from src.score_original import VQAEvaluator, AestheticEvaluator, harmonic_mean, ImageProcessor
+from src.preprocessing import apply_preprocessing_torch
 from PIL import Image
 from torch.nn import functional as F
 
@@ -17,11 +18,17 @@ def score_original(
     questions: list[str],
     choices_list: list[list[str]],
     answers: list[str],
+    apply_preprocessing: bool = True,
 ) -> float:
-    vqa_score = vqa_score_original(vqa_evaluator, image, questions, choices_list, answers)
-    aesthetic_score = aesthetic_score_original(aesthetic_evaluator, image)
-    score = harmonic_mean(vqa_score, aesthetic_score, beta=0.5)
-    return score, vqa_score, aesthetic_score
+    if apply_preprocessing:
+        proc_image = ImageProcessor(image).apply().image
+
+    vqa_score = vqa_score_original(vqa_evaluator, proc_image, questions, choices_list, answers)
+    aesthetic_score = aesthetic_score_original(aesthetic_evaluator, proc_image)
+    ocr_score = vqa_evaluator.ocr(image)
+    score = harmonic_mean(vqa_score, aesthetic_score, beta=0.5) * ocr_score
+
+    return score, vqa_score, aesthetic_score, ocr_score
 
 
 def vqa_score_original(
@@ -170,8 +177,46 @@ def score_gradient(
     questions: list[str],
     choices_list: list[list[str]],
     answers: list[str],
+    apply_preprocessing: bool = True,
 ) -> torch.Tensor:
+    if apply_preprocessing:
+        image = apply_preprocessing_torch(image)
+
     vqa_score_grad = vqa_score_gradient(vqa_evaluator, image, questions, choices_list, answers)
     aesthetic_score_grad = aesthetic_score_gradient(aesthetic_evaluator, image)
     score_grad = harmonic_mean_grad(vqa_score_grad, aesthetic_score_grad, beta=0.5)
+
+    # score_grad_ocr = score_gradient_ocr(vqa_evaluator, image)
+
     return score_grad, vqa_score_grad, aesthetic_score_grad
+
+
+def score_gradient_ocr(
+    evaluator: VQAEvaluator,
+    image: torch.Tensor,
+) -> torch.Tensor:
+    image_shape = (
+        evaluator.processor.image_processor.size["height"],
+        evaluator.processor.image_processor.size["width"],
+    )
+    image = F.interpolate(
+        image.unsqueeze(0), size=image_shape, mode="bicubic", align_corners=False, antialias=True
+    )
+    image = (image - 0.5) / 0.5
+
+    inputs = evaluator.processor(
+        images=Image.new("RGB", image_shape),
+        text='<image>ocr\n',
+        return_tensors="pt",
+        padding="longest",
+    ).to("cuda:0")
+    inputs["pixel_values"] = image
+
+    outputs = evaluator.model(**inputs)
+    logits = outputs.logits[:, -1, :]
+    probs = torch.softmax(logits, dim=-1)
+
+    eos_token_id = evaluator.processor.tokenizer.eos_token_id
+    eos_prob = probs[:, eos_token_id]
+
+    return eos_prob
