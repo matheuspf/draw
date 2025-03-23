@@ -27,19 +27,57 @@ import requests
 import torch
 from PIL import Image
 from tqdm.auto import tqdm
+from src.utils import optimize_svg
+
+
+
+def svg_to_png(svg_code: str, size: tuple = (384, 384)) -> Image.Image:
+    if 'viewBox' not in svg_code:
+        svg_code = svg_code.replace(
+            '<svg', f'<svg viewBox="0 0 {size[0]} {size[1]}"'
+        )
+
+    png_data = cairosvg.svg2png(bytestring=svg_code.encode('utf-8'))
+    return Image.open(io.BytesIO(png_data)).convert('RGB').resize(size)
+
+
+def png_to_svg(img, image_size=(384, 384), pixel_size=1,):
+    # img = Image.open(input_image_path).convert("RGB") 
+
+    # Get image dimensions
+    width, height = img.size
+
+    # Start the SVG file
+    svg_content = f'<svg viewBox="0 0 {image_size[0]} {image_size[1]}">\n'
+
+    # Loop through each pixel in the image
+    for y in range(height):
+        for x in range(width):
+            # Get the RGB color of the pixel
+            r, g, b = img.getpixel((x, y))
+            # Create a rectangle for the pixel
+            svg_content += f'    <rect x="{x * pixel_size}" y="{y * pixel_size}" width="{pixel_size}" height="{pixel_size}" fill="rgb({r},{g},{b})" />\n'
+
+    # Close the SVG file
+    svg_content += '</svg>'
+    svg_content = svg_content.replace("\n", "").replace("    ", "").replace(" />", "/>")
+    svg_content = optimize_svg(svg_content)
+
+    return svg_content
+
 
 
 def get_initial_image(
     dim: tuple[int],
-    mean_value: float = 0.0,
+    mean_value: float = 0.5,
     std_value: float = 0.1,
-    low: float = -1.0,
+    low: float = 0.0,
     high: float = 1.0,
 ) -> torch.Tensor:
-    # embedding = torch.randn(dim, dtype=torch.float32) * std_value
-    # embedding = embedding + mean_value
-    # embedding = torch.clamp(embedding, low, high)
-    embedding = 0.5 * torch.ones(dim, dtype=torch.float32)
+    embedding = torch.randn(dim, dtype=torch.float32) * std_value
+    embedding = embedding + mean_value
+    embedding = torch.clamp(embedding, low, high)
+    # embedding = 0.5 * torch.ones(dim, dtype=torch.float32)
     embedding = embedding.to("cuda:0")
     embedding.requires_grad_(True)
     return embedding
@@ -111,8 +149,10 @@ def optimize_pixel_wise(
 
     for iter_idx in range(num_iterations):
         optimizer.zero_grad()
-        loss, _, _ = score_gradient(
-            vqa_evaluator, aesthetic_evaluator, image, questions, choices_list, answers
+        
+        img = F.interpolate(image.unsqueeze(0), size=(384, 384), mode="bicubic", align_corners=False, antialias=True)[0]
+        loss, _, _, _ = score_gradient(
+            vqa_evaluator, aesthetic_evaluator, img, questions, choices_list, answers
         )
         loss = -loss
         loss.backward()
@@ -120,8 +160,9 @@ def optimize_pixel_wise(
         scheduler.step()
 
         if iter_idx == 0 or (iter_idx + 1) % validation_steps == 0:
+            pil_image = torch_to_pil(image).resize((384, 384))
             val_loss, _, _, _ = score_original(
-                vqa_evaluator, aesthetic_evaluator, torch_to_pil(image), questions, choices_list, answers
+                vqa_evaluator, aesthetic_evaluator, pil_image, questions, choices_list, answers
             )
             loss_diff = np.abs(-loss.item() - val_loss)
 
@@ -129,7 +170,7 @@ def optimize_pixel_wise(
             f"Iteration {iter_idx}/{num_iterations} | "
             f"Loss: {-loss.item():.4f} | "
             f"Val Loss: {val_loss:.4f} | "
-            f"Loss Diff: {loss_diff:.4f} | "
+            # f"Loss Diff: {loss_diff:.4f} | "
             f"LR: {scheduler.get_last_lr()[0]:.6f}"
         )
         pbar.update(1)
@@ -147,7 +188,7 @@ def evaluate_dataset():
     aesthetic_evaluator = AestheticEvaluator()
 
     df = pd.read_parquet("/home/mpf/code/kaggle/draw/question_generation_results.parquet")
-    df = df[df["set"] == "test"].head(1)
+    df = df[df["set"] == "test"]
 
     for index, row in tqdm(df.iterrows(), total=len(df)):
         description = row["description"]
@@ -163,23 +204,28 @@ def evaluate_dataset():
             "answers": [dct["answer"] for dct in row["generated"]],
         }
         
-        # image = optimize_pixel_wise(
-        #     vqa_evaluator=vqa_evaluator,
-        #     aesthetic_evaluator=aesthetic_evaluator,
-        #     description=description,
-        #     questions=gen_questions_list["questions"],
-        #     choices_list=gen_questions_list["choices_list"],
-        #     answers=gen_questions_list["answers"],
-        #     num_iterations=100,
-        #     validation_steps=5,
-        #     learning_rate=1e-1,
-        #     image_shape=(3, 224, 224),
-        # )
-        # image.save("output.png")
+        run_inference = True
+        if run_inference:
+            image = optimize_pixel_wise(
+                vqa_evaluator=vqa_evaluator,
+                aesthetic_evaluator=aesthetic_evaluator,
+                description=description,
+                questions=gen_questions_list["questions"],
+                choices_list=gen_questions_list["choices_list"],
+                answers=gen_questions_list["answers"],
+                num_iterations=50,
+                validation_steps=5,
+                learning_rate=5e-2,
+                image_shape=(3, 224, 224),
+            )
+            image.save("output.png")
 
 
+        image = Image.open("output.png").resize((384, 384))
 
-        image = Image.open("output.png")#.resize((384, 384))
+        svg_content = png_to_svg(image)
+        with open("output.svg", "w") as f:
+            f.write(svg_content)
 
         score_gen = score_original(
             vqa_evaluator,
@@ -210,50 +256,66 @@ def test_eval():
     description = "a yellow forest at dusk"
     questions = [
         "What is the main setting of the image?",
-        # "Is there anything yellow in the image?",
-        # "What time of day is suggested in the image?",
-        # "What color is prominently featured in the image?",
+        "Is there anything yellow in the image?",
+        "What time of day is suggested in the image?",
+        "What color is prominently featured in the image?",
         # "What do you see in the image?",
         # "Is yellow NOT in the image?",
     ]
     choices_list = [
         ["beach", "desert", "forest", "mountain"],
-        # ["no", "yes"],
-        # ["dawn", "dusk", "midday", "midnight"],
-        # ["green", "orange", "yellow", "white"],
+        ["no", "yes"],
+        ["dawn", "dusk", "midday", "midnight"],
+        ["green", "orange", "yellow", "white"],
         # ["red", "black", "white", "yellow"],
         # ["no", "yes"],
     ]
     answers = [
         "forest",
-        # "yes",
-        # "dusk",
-        # "yellow",
+        "yes",
+        "dusk",
+        "yellow",
         # "yellow",
         # "no",
     ]
 
-    # image = Image.open("output.png")#.resize((384, 384))
-    # scores = score_original(
-    #     vqa_evaluator, aesthetic_evaluator, image, questions, choices_list, answers
-    # )
-    # print(f"Score: {scores}")
-    # exit()
+    run_optimization = False
 
-    image = optimize_pixel_wise(
-        vqa_evaluator=vqa_evaluator,
-        aesthetic_evaluator=aesthetic_evaluator,
-        description=description,
-        questions=questions,
-        choices_list=choices_list,
-        answers=answers,
-        num_iterations=50,
-        validation_steps=5,
-        learning_rate=1e-1,
-        image_shape=(3, 224, 224),
+    if run_optimization:
+        image = optimize_pixel_wise(
+            vqa_evaluator=vqa_evaluator,
+            aesthetic_evaluator=aesthetic_evaluator,
+            description=description,
+            questions=questions,
+            choices_list=choices_list,
+            answers=answers,
+            num_iterations=50,
+            validation_steps=5,
+            learning_rate=1e-1,
+            image_shape=(3, 12, 12)
+        )
+
+        image.save("output.png")
+        
+        svg_content = png_to_svg(image)
+        with open("output.svg", "w") as f:
+            f.write(svg_content)
+        
+    else:
+        # image = Image.open("output.png")
+        image = Image.open("/home/mpf/Downloads/f2.jpg")
+
+    image = image.resize((384, 384))
+    scores = score_original(
+        vqa_evaluator, aesthetic_evaluator, image, questions, choices_list, answers
     )
+    svg_content = png_to_svg(image)
+    len_svg = len(svg_content.encode("utf-8"))
+    with open("output.svg", "w") as f:
+        f.write(svg_content)
 
-    image.save("output.png")
+    print(f"Score: {scores}")
+    print(f"Length of SVG: {len_svg}")
 
 
 if __name__ == "__main__":

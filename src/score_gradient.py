@@ -22,11 +22,13 @@ def score_original(
 ) -> float:
     if apply_preprocessing:
         proc_image = ImageProcessor(image).apply().image
+    else:
+        proc_image = image
 
     vqa_score = vqa_score_original(vqa_evaluator, proc_image, questions, choices_list, answers)
     aesthetic_score = aesthetic_score_original(aesthetic_evaluator, proc_image)
     ocr_score = vqa_evaluator.ocr(image)
-    score = harmonic_mean(vqa_score, aesthetic_score, beta=0.5) * ocr_score
+    score = harmonic_mean(vqa_score, aesthetic_score, beta=0.5)# * ocr_score
 
     return score, vqa_score, aesthetic_score, ocr_score
 
@@ -170,26 +172,6 @@ def vqa_score_gradient(
 
     return answer_probability
 
-def score_gradient(
-    vqa_evaluator: VQAEvaluator,
-    aesthetic_evaluator: AestheticEvaluator,
-    image: torch.Tensor,
-    questions: list[str],
-    choices_list: list[list[str]],
-    answers: list[str],
-    apply_preprocessing: bool = True,
-) -> torch.Tensor:
-    if apply_preprocessing:
-        image = apply_preprocessing_torch(image)
-
-    vqa_score_grad = vqa_score_gradient(vqa_evaluator, image, questions, choices_list, answers)
-    aesthetic_score_grad = aesthetic_score_gradient(aesthetic_evaluator, image)
-    score_grad = harmonic_mean_grad(vqa_score_grad, aesthetic_score_grad, beta=0.5)
-
-    # score_grad_ocr = score_gradient_ocr(vqa_evaluator, image)
-
-    return score_grad, vqa_score_grad, aesthetic_score_grad
-
 
 def score_gradient_ocr(
     evaluator: VQAEvaluator,
@@ -217,6 +199,39 @@ def score_gradient_ocr(
     probs = torch.softmax(logits, dim=-1)
 
     eos_token_id = evaluator.processor.tokenizer.eos_token_id
+    # eos_token_id = evaluator.processor.tokenizer.encode("A")[0]
     eos_prob = probs[:, eos_token_id]
+    
+    eos_score = 1.0 - (0.2 - eos_prob).maximum(torch.tensor(0.0))
+    # eos_score = 100 * (probs.max(dim=-1).values - eos_prob)
+    # eos_score = 1.0 - (probs.max(dim=-1).values - eos_prob)
 
-    return eos_prob
+    return eos_score
+
+
+def score_gradient(
+    vqa_evaluator: VQAEvaluator,
+    aesthetic_evaluator: AestheticEvaluator,
+    image: torch.Tensor,
+    questions: list[str],
+    choices_list: list[list[str]],
+    answers: list[str],
+    apply_preprocessing: bool = True,
+) -> torch.Tensor:
+    if apply_preprocessing:
+        proc_image = apply_preprocessing_torch(image)
+    else:
+        proc_image = image
+
+    vqa_score_grad = vqa_score_gradient(vqa_evaluator, proc_image, questions, choices_list, answers)
+    aesthetic_score_grad = aesthetic_score_gradient(aesthetic_evaluator, proc_image)
+    score_grad = harmonic_mean_grad(vqa_score_grad, aesthetic_score_grad, beta=0.5)
+
+    # score_grad_ocr = score_gradient_ocr(vqa_evaluator, image)
+    # score_grad = score_grad * score_grad_ocr
+    # print("\n", score_grad_ocr.item())
+    score_grad_ocr = 0.0
+
+    return score_grad, vqa_score_grad, aesthetic_score_grad, score_grad_ocr
+
+
