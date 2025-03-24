@@ -24,7 +24,7 @@ def score_original(
         proc_image = ImageProcessor(image).apply().image
     else:
         proc_image = image
-
+    
     vqa_score = vqa_score_original(vqa_evaluator, proc_image, questions, choices_list, answers)
     aesthetic_score = aesthetic_score_original(aesthetic_evaluator, proc_image)
     ocr_score = vqa_evaluator.ocr(image)

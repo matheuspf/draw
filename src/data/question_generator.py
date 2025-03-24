@@ -6,7 +6,6 @@ import random
 def load_data():
     # Load descriptions and questions
     descriptions_df = pd.read_csv('train.csv')
-    # questions_df = pd.read_csv('questions.csv')
     questions_df = pd.read_parquet("/kaggle/input/questions.parquet")
     
     # Create a dictionary with all questions for each ID
@@ -45,6 +44,8 @@ Format your response as JSON. At least two questions should be multiple-choice q
 
 Note how all questions are related to the image, as well as the description itself.
 
+Generate a total of 8 distinct questions for a given description.
+
 Examples:
 
 """
@@ -79,7 +80,7 @@ def main():
     
     # Split data into few-shot examples and test examples
     random.seed(42)
-    random.shuffle(data)
+    # random.shuffle(data)
     
     few_shot_count = len(data) // 2
     few_shot_examples = data[:few_shot_count]
@@ -127,6 +128,7 @@ def main():
         print("\nGround Truth Questions:")
         print(json.dumps(test_example['questions'], indent=2))
         print("\nGenerated Questions:")
+        print(len(generated_questions))
         print(json.dumps(generated_questions, indent=2))
         print("\n" + "="*80 + "\n")
     
