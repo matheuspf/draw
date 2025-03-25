@@ -157,8 +157,8 @@ def get_initial_image(
     dim: tuple[int],
     **kwargs,
 ) -> torch.Tensor:
-    embd = cv2.imread("/home/mpf/Downloads/f2.jpg")
-    # embd = cv2.imread("/home/mpf/code/kaggle/draw/t1.png")
+    # embd = cv2.imread("/home/mpf/Downloads/f2.jpg")
+    embd = cv2.imread("/home/mpf/code/kaggle/draw/t1.png")
     embd = cv2.cvtColor(embd, cv2.COLOR_BGR2RGB)
     embd = cv2.resize(embd, dim[-2:], interpolation=cv2.INTER_AREA)
     embd = embd.astype(np.float32) / 255.0
@@ -366,19 +366,19 @@ def evaluate_dataset():
                 questions=gen_questions_list["questions"],
                 choices_list=gen_questions_list["choices_list"],
                 answers=gen_questions_list["answers"],
-                num_iterations=1000,
-                validation_steps=20,
+                num_iterations=100,
+                validation_steps=10,
                 learning_rate=1e-1,
-                image_shape=(3, 14, 14)
+                image_shape=(3, 32, 32)
             )
-            image.save("output.png")
+            image.save("output_aest.png")
 
 
-        image = Image.open("output.png").resize((224, 224), Image.Resampling.NEAREST)
+        image = Image.open("output_aest.png").resize((224, 224), Image.Resampling.NEAREST)
         # image = Image.open("t1.png").resize((384, 384))
 
         svg_content = png_to_svg(image)
-        with open("output.svg", "w") as f:
+        with open("output_aest.svg", "w") as f:
             f.write(svg_content)
 
         score_gen = score_original(

@@ -136,9 +136,9 @@ class VQAEvaluator:
         )
         self.letters = string.ascii_uppercase
         self.model_path = kagglehub.model_download(
-            'google/paligemma-2/transformers/paligemma2-10b-mix-448'
+            # 'google/paligemma-2/transformers/paligemma2-10b-mix-448'
             # 'google/paligemma-2/transformers/paligemma2-10b-mix-224'
-            # 'google/paligemma-2/transformers/paligemma2-3b-mix-224'
+            'google/paligemma-2/transformers/paligemma2-3b-mix-224'
         )
         self.processor = AutoProcessor.from_pretrained(self.model_path)
         self.model = PaliGemmaForConditionalGeneration.from_pretrained(

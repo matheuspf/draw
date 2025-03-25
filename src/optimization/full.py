@@ -150,7 +150,7 @@ def optimize_pixel_wise(
     starting_image = image.detach().clone()
     starting_image = F.interpolate(starting_image.clamp(0, 1).unsqueeze(0), size=(384, 384), mode="bicubic", align_corners=False, antialias=True)[0].clamp(0, 1)
 
-    sz = 20
+    sz = 2
     mask = torch.zeros_like(starting_image)
     mask[:, :sz, :] = 1.0
     mask[:, -sz:, :] = 1.0
@@ -159,7 +159,7 @@ def optimize_pixel_wise(
     # mask[:, mask.shape[1]//2 - sz//2:mask.shape[1]//2 + sz//2, :] = 1.0
     # mask[:, :, mask.shape[2]//2 - sz//2:mask.shape[2]//2 + sz//2] = 1.0
     # mask[...] = 1.0
-    # mask[:2, ...] = 1.0
+    mask[:2, ...] = 1.0
 
     optimizer, scheduler = get_optimizer(
         image, lr=learning_rate, weight_decay=weight_decay, T_max=num_iterations, eta_min=0.0
@@ -174,29 +174,42 @@ def optimize_pixel_wise(
 
         img = img * mask + (1.0 - mask) * starting_image
 
-        # img = apply_preprocessing_torch(img)
-        loss = score_gradient_ocr(vqa_evaluator, img).mean()
+        ocr_loss = score_gradient_ocr(vqa_evaluator, img).mean()
+        
+        proc_img = apply_preprocessing_torch(img)
+        aest_loss = 10 * (1.0 - aesthetic_score_gradient(aesthetic_evaluator, proc_img)).mean()
+
+        loss = ocr_loss + 10 * aest_loss
+
         loss.backward()
         optimizer.step()
         scheduler.step()
 
         if iter_idx == 0 or (iter_idx + 1) % validation_steps == 0:
             pil_image = torch_to_pil(img).resize((384, 384))
-            # pil_image = ImageProcessor(copy.deepcopy(pil_image)).apply().image
-            val_loss, text = vqa_evaluator.ocr(pil_image)
+            ocr_val_loss, text = vqa_evaluator.ocr(pil_image)
+
+            proc_pil_img = ImageProcessor(copy.deepcopy(pil_image)).apply().image
+            aest_val_loss = (1.0 - aesthetic_score_original(aesthetic_evaluator, proc_pil_img))
+            val_loss = ocr_val_loss + aest_val_loss
+
             text = text.replace('\n', '')
 
         pbar.set_description(
-            f"Iteration {iter_idx}/{num_iterations} | "
-            f"Loss: {loss.item():.4f} | "
-            f"Val Loss: {val_loss:.4f} | "
-            f"Text: `{text}` | "
-            f"LR: {scheduler.get_last_lr()[0]:.6f}"
+            f"It {iter_idx}/{num_iterations} | "
+            f"Loss: {loss.item():.3f} | "
+            f"OCR Loss: {ocr_loss.item():.3f} | "
+            f"Aest Loss: {aest_loss.item():.3f} | "
+            f"Val Loss: {val_loss:.3f} | "
+            f"OCR Val Loss: {ocr_val_loss:.3f} | "
+            f"Aest Val Loss: {aest_val_loss:.3f} | "
+            f"Text: `{text[:10]}` | "
+            f"LR: {scheduler.get_last_lr()[0]:.4f}"
         )
         pbar.update(1)
 
-        if 1.0 - val_loss < 1e-3:
-            break
+        # if 1.0 - val_loss < 1e-3:
+        #     break
 
     image = torch_to_pil(img)
 
