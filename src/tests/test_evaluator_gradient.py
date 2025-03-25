@@ -132,25 +132,58 @@ def test_aesthetic_score_gradient():
     evaluator = AestheticEvaluator()
 
     image_list = [
-        "/home/mpf/code/kaggle/draw/org.png",
-        "/home/mpf/code/kaggle/draw/processed.png",
-        "/home/mpf/code/vision/base.png",
+        # "/home/mpf/code/kaggle/draw/output.png",
+        "/home/mpf/code/kaggle/draw/t1.png",
     ]
 
     mean_distance = 0.0
 
+    
+    def tensor_to_pil(img_torch):
+        img_torch = img_torch * torch.tensor([0.26862954, 0.26130258, 0.27577711], device=img_torch.device).view(3, 1, 1) \
+            + torch.tensor([0.48145466, 0.4578275, 0.40821073], device=img_torch.device).view(3, 1, 1)
+        img_torch = img_torch.clamp(0, 1).permute(1, 2, 0)
+        img_np = (255 * img_torch).detach().cpu().numpy().astype(np.uint8)
+        return Image.fromarray(img_np)
+
     for image_path in image_list:
-        org_image = Image.open(image_path)
-        image_processor = ImageProcessor(copy.deepcopy(org_image))
-        image_processor.apply()
-        image = image_processor.image
+        org_image = Image.open(image_path).convert("RGB").resize((224, 224))
+        # image = ImageProcessor(copy.deepcopy(org_image)).apply().image
+        image = org_image
 
         original_score = aesthetic_score_original(evaluator, image)
+
+        org_img_proc = evaluator.preprocessor(image).cuda()
+        # org_img_proc_pil = tensor_to_pil(org_img_proc)
+        # org_img_proc_pil.save("org_img_proc.png")
+
 
         torch_image = torch.tensor(np.array(org_image), dtype=torch.float32, device="cuda:0")
         torch_image = (torch_image / 255.0).permute(2, 0, 1)
 
-        torch_image = apply_preprocessing_torch(torch_image)
+        # torch_image = apply_preprocessing_torch(torch_image)
+        
+        # torch_img_proc = F.interpolate(
+        #     torch_image.unsqueeze(0), size=(224, 224), mode="bicubic", align_corners=False, antialias=True
+        # )
+        # torch_img_proc = (
+        #    torch_img_proc 
+        #     - torch.tensor([0.48145466, 0.4578275, 0.40821073], device=torch_img_proc.device).view(1, 3, 1, 1)
+        # ) / torch.tensor([0.26862954, 0.26130258, 0.27577711], device=torch_img_proc.device).view(1, 3, 1, 1)
+        # torch_img_proc = torch_img_proc[0].cuda()
+        # torch_img_proc_pil = tensor_to_pil(torch_img_proc)
+        # torch_img_proc_pil.save("torch_img_proc.png")
+
+        # print(org_img_proc.shape)
+        # print(org_img_proc.min(), org_img_proc.max(), org_img_proc.mean())
+        # print(torch_img_proc.shape)
+        # print(torch_img_proc.min(), torch_img_proc.max(), torch_img_proc.mean())
+
+        # diff = (org_img_proc - torch_img_proc).abs()
+        # print(diff.max(), diff.mean())
+        # import pdb; pdb.set_trace()
+
+        # torch_image = apply_preprocessing_torch(torch_image)
         gradient_score = aesthetic_score_gradient(evaluator, torch_image).item()
 
         diff = np.abs(original_score - gradient_score)
@@ -224,5 +257,5 @@ def test_score_gradient():
 
 
 # test_vqa_score_gradient()
-# test_aesthetic_score_gradient()
-test_score_gradient()
+test_aesthetic_score_gradient()
+# test_score_gradient()

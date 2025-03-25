@@ -310,7 +310,7 @@ class VQAEvaluator:
         num_char = len(decoded)
 
         # Exponentially decreasing towards 0.0 if more than free_chars detected
-        return min(1.0, math.exp(-num_char + free_chars))
+        return min(1.0, math.exp(-num_char + free_chars)), decoded
 
 
 class AestheticPredictor(nn.Module):

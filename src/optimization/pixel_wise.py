@@ -49,11 +49,29 @@ def batch_score_gradient(
     answers: list[str],
     batch_size: int = 1
 ):
-    proc_image = apply_preprocessing_torch(image)
+    # # proc = apply_preprocessing_torch(image)
+    # proc = image
 
-    # loss = -aesthetic_score_gradient(aesthetic_evaluator, proc_image)
+    # proc = F.interpolate(
+    #     proc.unsqueeze(0), size=(224, 224), mode="bicubic", align_corners=False, antialias=True
+    # )
+    # proc = (
+    #     proc
+    #     - torch.tensor([0.48145466, 0.4578275, 0.40821073], device=proc.device, dtype=proc.dtype).view(1, 3, 1, 1)
+    # ) / torch.tensor([0.26862954, 0.26130258, 0.27577711], device=proc.device, dtype=proc.dtype).view(1, 3, 1, 1)
+    
+    # loss = -vqa_evaluator(proc).mean()
     # loss.backward()
+ 
     # return -loss
+    
+    
+    proc_image = apply_preprocessing_torch(image)
+    # proc_image = image
+
+    loss = -aesthetic_score_gradient(aesthetic_evaluator, proc_image)
+    loss.backward()
+    return -loss
     
     num_questions = len(questions)
     num_batches = num_questions // batch_size
@@ -67,7 +85,6 @@ def batch_score_gradient(
         batch_questions = questions[idx:idx+batch_size]
         batch_choices_list = choices_list[idx:idx+batch_size]
         batch_answers = answers[idx:idx+batch_size]
-
 
         proc_image = apply_preprocessing_torch(image)
 
@@ -120,34 +137,35 @@ def png_to_svg(img, image_size=(384, 384), pixel_size=1,):
 
 
 
-def get_initial_image(
-    dim: tuple[int],
-    mean_value: float = 0.5,
-    std_value: float = 0.1,
-    low: float = 0.0,
-    high: float = 1.0,
-) -> torch.Tensor:
-    embedding = torch.randn(dim, dtype=torch.float32) * std_value
-    embedding = embedding + mean_value
-    embedding = torch.clamp(embedding, low, high)
-    # embedding = 0.5 * torch.ones(dim, dtype=torch.float32)
-    embedding = embedding.to("cuda:0")
-    embedding.requires_grad_(True)
-    return embedding
-
-
 # def get_initial_image(
 #     dim: tuple[int],
-#     **kwargs,
+#     mean_value: float = 0.5,
+#     std_value: float = 0.1,
+#     low: float = 0.0,
+#     high: float = 1.0,
 # ) -> torch.Tensor:
-#     embd = cv2.imread("/home/mpf/Downloads/f2.jpg")
-#     embd = cv2.cvtColor(embd, cv2.COLOR_BGR2RGB)
-#     embd = cv2.resize(embd, dim[-2:], interpolation=cv2.INTER_AREA)
-#     embd = embd.astype(np.float32) / 255.0
-#     embd = torch.tensor(embd, dtype=torch.float32, device="cuda:0")
-#     embd = embd.permute((2, 0, 1))
-#     embd.requires_grad_(True)
-#     return embd
+#     embedding = torch.randn(dim, dtype=torch.float32) * std_value
+#     embedding = embedding + mean_value
+#     embedding = torch.clamp(embedding, low, high)
+#     # embedding = 0.5 * torch.ones(dim, dtype=torch.float32)
+#     embedding = embedding.to("cuda:0")
+#     embedding.requires_grad_(True)
+#     return embedding
+
+
+def get_initial_image(
+    dim: tuple[int],
+    **kwargs,
+) -> torch.Tensor:
+    embd = cv2.imread("/home/mpf/Downloads/f2.jpg")
+    # embd = cv2.imread("/home/mpf/code/kaggle/draw/t1.png")
+    embd = cv2.cvtColor(embd, cv2.COLOR_BGR2RGB)
+    embd = cv2.resize(embd, dim[-2:], interpolation=cv2.INTER_AREA)
+    embd = embd.astype(np.float32) / 255.0
+    embd = torch.tensor(embd, dtype=torch.float32, device="cuda:0")
+    embd = embd.permute((2, 0, 1))
+    embd.requires_grad_(True)
+    return embd
 
 
 def get_optimizer(
@@ -184,6 +202,14 @@ def optimize_pixel_wise(
     weight_decay: float = 0.0,
     validation_steps: int = 10,
 ) -> Image.Image:
+
+    # from src.segmentation.train_score import LitScore
+    # aest_grad = LitScore.load_from_checkpoint("/home/mpf/code/kaggle/draw/checkpoints_score/score-epoch=09-val_loss=0.0154.ckpt")
+    # aest_grad.to("cuda")
+    # aest_grad.eval()
+    # aest_grad.requires_grad_(False)
+    
+    
     vqa_evaluator.model.eval()
     vqa_evaluator.model.requires_grad_(False)
     aesthetic_evaluator.predictor.eval()
@@ -203,20 +229,20 @@ def optimize_pixel_wise(
     for iter_idx in range(num_iterations):
         optimizer.zero_grad()
         
-        img = F.interpolate(image.unsqueeze(0), size=(384, 384), mode="bicubic", align_corners=False, antialias=True)[0]
+        # img = F.interpolate(image.clamp(0, 1).unsqueeze(0), size=(384, 384), mode="bicubic", align_corners=False, antialias=True)[0].clamp(0, 1)
+        # img = (image * 255).clamp(0, 255).to(image.dtype) / 255.0
+
+        img = F.interpolate(image.unsqueeze(0), size=(224, 224), mode="nearest")[0].clamp(0, 1)
         loss = -batch_score_gradient(
             vqa_evaluator, aesthetic_evaluator, img, questions, choices_list, answers
+            # aest_grad, aesthetic_evaluator, img, questions, choices_list, answers
         )
-        # loss, _, _, _ = score_gradient(
-        #     vqa_evaluator, aesthetic_evaluator, img, questions, choices_list, answers
-        # )
-        # loss = -loss
-        # loss.backward()
+
         optimizer.step()
-        # scheduler.step()
+        scheduler.step()
 
         if iter_idx == 0 or (iter_idx + 1) % validation_steps == 0:
-            pil_image = torch_to_pil(image).resize((384, 384))
+            pil_image = torch_to_pil(image).resize((224, 224), Image.Resampling.NEAREST)
             val_loss, _, _, _ = score_original(
                 vqa_evaluator, aesthetic_evaluator, pil_image, questions, choices_list, answers
             )
@@ -313,7 +339,7 @@ def evaluate_dataset():
     aesthetic_evaluator = AestheticEvaluator()
 
     df = pd.read_parquet("/home/mpf/code/kaggle/draw/question_generation_results.parquet")
-    df = df[df["set"] == "test"]
+    df = df[df["set"] == "test"].head(1)
 
     for index, row in tqdm(df.iterrows(), total=len(df)):
         description = row["description"]
@@ -340,15 +366,16 @@ def evaluate_dataset():
                 questions=gen_questions_list["questions"],
                 choices_list=gen_questions_list["choices_list"],
                 answers=gen_questions_list["answers"],
-                num_iterations=50,
-                validation_steps=5,
+                num_iterations=1000,
+                validation_steps=20,
                 learning_rate=1e-1,
-                image_shape=(3, 224, 224),
+                image_shape=(3, 14, 14)
             )
             image.save("output.png")
 
 
-        image = Image.open("output.png").resize((384, 384))
+        image = Image.open("output.png").resize((224, 224), Image.Resampling.NEAREST)
+        # image = Image.open("t1.png").resize((384, 384))
 
         svg_content = png_to_svg(image)
         with open("output.svg", "w") as f:
@@ -374,7 +401,6 @@ def evaluate_dataset():
         
         print(f"Score Gen: {score_gen}")
         print(f"Score GT: {score_gt}")
-
 
 
 

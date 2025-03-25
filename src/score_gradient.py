@@ -1,5 +1,5 @@
 import string
-
+import copy
 import torch
 from src.score_original import VQAEvaluator, AestheticEvaluator, harmonic_mean, ImageProcessor
 from src.preprocessing import apply_preprocessing_torch
@@ -21,7 +21,7 @@ def score_original(
     apply_preprocessing: bool = True,
 ) -> float:
     if apply_preprocessing:
-        proc_image = ImageProcessor(image).apply().image
+        proc_image = ImageProcessor(copy.deepcopy(image)).apply().image
     else:
         proc_image = image
     
@@ -114,8 +114,8 @@ def aesthetic_score_gradient(
     )
     image = (
         image
-        - torch.tensor([0.48145466, 0.4578275, 0.40821073], device=image.device).view(1, 3, 1, 1)
-    ) / torch.tensor([0.26862954, 0.26130258, 0.27577711], device=image.device).view(1, 3, 1, 1)
+        - torch.tensor([0.48145466, 0.4578275, 0.40821073], device=image.device, dtype=image.dtype).view(1, 3, 1, 1)
+    ) / torch.tensor([0.26862954, 0.26130258, 0.27577711], device=image.device, dtype=image.dtype).view(1, 3, 1, 1)
     image_features = evaluator.clip_model.encode_image(image)
     image_features_norm = (image_features / image_features.norm(dim=-1, keepdim=True)).float()
     score = evaluator.predictor(image_features_norm) / 10.0  # scale to [0, 1]
@@ -177,6 +177,29 @@ def score_gradient_ocr(
     evaluator: VQAEvaluator,
     image: torch.Tensor,
 ) -> torch.Tensor:
+    return score_gradient_ocr_1(evaluator, image, text="", response=None)
+    
+    score = (
+        score_gradient_ocr_1(evaluator, image, text="", response="crim") +
+        score_gradient_ocr_1(evaluator, image, text="crim", response=None)
+    ) / 2.0
+    return score
+
+
+
+
+
+
+
+
+def score_gradient_ocr_1(
+    evaluator: VQAEvaluator,
+    image: torch.Tensor,
+    text: str = "",
+    response: str | None = None
+) -> torch.Tensor:
+    response = response or evaluator.processor.tokenizer.eos_token
+    
     image_shape = (
         evaluator.processor.image_processor.size["height"],
         evaluator.processor.image_processor.size["width"],
@@ -188,25 +211,80 @@ def score_gradient_ocr(
 
     inputs = evaluator.processor(
         images=Image.new("RGB", image_shape),
-        text='<image>ocr\n',
+        text='<image>ocr\n' + text,
         return_tensors="pt",
         padding="longest",
     ).to("cuda:0")
+
     inputs["pixel_values"] = image
-
     outputs = evaluator.model(**inputs)
+
     logits = outputs.logits[:, -1, :]
-    probs = torch.softmax(logits, dim=-1)
+    target_id = evaluator.processor.tokenizer.encode(response, add_special_tokens=False)[0]
+    target_tensor = torch.tensor([target_id], device=logits.device)
 
-    eos_token_id = evaluator.processor.tokenizer.eos_token_id
-    # eos_token_id = evaluator.processor.tokenizer.encode("A")[0]
-    eos_prob = probs[:, eos_token_id]
+    loss = F.cross_entropy(logits, target_tensor)
+
+    # print(evaluator.processor.tokenizer.decode(target_id))
+    # print(evaluator.processor.tokenizer.batch_decode(torch.argmax(logits, dim=-1)))
+    # import pdb; pdb.set_trace()
+
     
-    eos_score = 1.0 - (0.2 - eos_prob).maximum(torch.tensor(0.0))
-    # eos_score = 100 * (probs.max(dim=-1).values - eos_prob)
-    # eos_score = 1.0 - (probs.max(dim=-1).values - eos_prob)
+    return loss
 
-    return eos_score
+
+# def score_gradient_ocr_1(
+#     evaluator: VQAEvaluator,
+#     image: torch.Tensor,
+#     text: str = "",
+#     response: str | None = None
+# ) -> torch.Tensor:
+#     response = response or evaluator.processor.tokenizer.eos_token
+    
+#     image_shape = (
+#         evaluator.processor.image_processor.size["height"],
+#         evaluator.processor.image_processor.size["width"],
+#     )
+#     image = F.interpolate(
+#         image.unsqueeze(0), size=image_shape, mode="bicubic", align_corners=False, antialias=True
+#     )
+#     image = (image - 0.5) / 0.5
+
+#     inputs_temp = evaluator.processor(
+#         images=Image.new("RGB", image_shape),
+#         text='<image>ocr\n' + text,
+#         return_tensors="pt",
+#         padding="longest",
+#     ).to("cuda:0")
+
+#     inputs = evaluator.processor(
+#         images=Image.new("RGB", image_shape),
+#         text='<image>ocr\n' + text + response,
+#         return_tensors="pt",
+#         padding="longest",
+#     ).to("cuda:0")
+
+#     inputs["pixel_values"] = image
+#     outputs = evaluator.model(**inputs)
+
+#     response_idx = len(inputs_temp["input_ids"][0])
+#     target_ids = inputs["input_ids"][:, response_idx:]
+#     target_ids[:, -1] = evaluator.processor.tokenizer.eos_token_id
+    
+#     logits = outputs.logits[:, response_idx - 1:-1, :]
+
+#     # target_ids = target_ids[:, 1:]
+#     # logits = logits[:, :-1, :]
+    
+#     # preds = torch.argmax(logits, dim=-1)
+#     # print(evaluator.processor.tokenizer.batch_decode(target_ids))
+#     # print(evaluator.processor.tokenizer.batch_decode(preds))
+#     # import pdb; pdb.set_trace()
+
+#     loss = F.cross_entropy(logits.view(-1, logits.size(-1)), target_ids.view(-1))
+    
+#     return loss
+
 
 
 def score_gradient(
