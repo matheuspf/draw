@@ -176,8 +176,12 @@ def vqa_score_gradient(
 def score_gradient_ocr(
     evaluator: VQAEvaluator,
     image: torch.Tensor,
+    text: str = "",
+    response: str | None = None
 ) -> torch.Tensor:
-    return score_gradient_ocr_1(evaluator, image, text="", response=None)
+    # return score_gradient_ocr_1(evaluator, image, text="", response="<eos>  purple pyramids spiraling around a bronze cone")
+    # return score_gradient_ocr_1(evaluator, image, text="\nA", response=None)
+    return score_gradient_ocr_1(evaluator, image, text=text, response=response)
 
 
 def score_gradient_ocr_1(
@@ -253,16 +257,10 @@ def score_gradient_ocr_1(
 #     response_idx = len(inputs_temp["input_ids"][0])
 #     target_ids = inputs["input_ids"][:, response_idx:]
 #     target_ids = torch.cat([target_ids[0], torch.tensor([evaluator.processor.tokenizer.eos_token_id], device=target_ids.device)], dim=-1).unsqueeze(0)
-#     # target_ids[:, -1] = evaluator.processor.tokenizer.eos_token_id
 #     logits = outputs.logits[:, response_idx - 1:, :]
 
-#     # preds = torch.argmax(logits, dim=-1)
-#     # print(evaluator.processor.tokenizer.batch_decode(target_ids))
-#     # print(evaluator.processor.tokenizer.batch_decode(preds))
-#     # import pdb; pdb.set_trace()
-
 #     loss = F.cross_entropy(logits[0], target_ids[0])
-
+    
 #     return loss
 
 

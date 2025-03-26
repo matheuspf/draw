@@ -1,4 +1,6 @@
 import xml.etree.ElementTree as ET
+import random
+import numpy as np
 from lxml import etree
 import pydiffvg
 import torch
@@ -6,6 +8,8 @@ import re
 import io
 from PIL import Image
 import cairosvg
+import scour.scour
+
 
 
 def convert_svg_floats_to_ints(svg_content):
@@ -196,18 +200,36 @@ def fix_xml_svg(svg_string):
     return etree.tostring(root, pretty_print=True, encoding='utf-8').decode('utf-8')
 
 
-def optimize_svg(svg):
-    svg = fix_xml_svg(svg)
-    svg = convert_svg_floats_to_ints(svg)
-    svg = optimize_svg_paths(svg)
-    svg = minify_svg(svg)
 
-    svg = svg.replace("version='1.0'", "").replace('version="1.0"', "")
-    svg = svg.replace("version='2.0'", "").replace('version="2.0"', "")
-    svg = svg.replace('transform=" ', 'transform="')
+
+
+
+def optimize_svg(svg):
+    # svg = fix_xml_svg(svg)
+    # svg = convert_svg_floats_to_ints(svg)
+    # svg = optimize_svg_paths(svg)
+    # svg = minify_svg(svg)
+
+    # svg = svg.replace("version='1.0'", "").replace('version="1.0"', "")
+    # svg = svg.replace("version='2.0'", "").replace('version="2.0"', "")
+    # svg = svg.replace('transform=" ', 'transform="')
     
     # svg = svg.replace('stroke-width="1"', '')
     # svg = svg.replace('stroke-width="2"', '')
+
+    options = scour.scour.parse_args(['--enable-viewboxing',
+                                 '--enable-id-stripping',
+                                 '--enable-comment-stripping',
+                                 '--shorten-ids',
+                                 '--indent=none',
+                                 '--remove-descriptive-elements',
+                                 '--strip-xml-prolog',
+                                 '--remove-metadata',
+                                 '--enable-comment-stripping',
+                                 '--renderer-workaround',
+                                 '--disable-embed-rasters'])
+
+    svg = scour.scour.scourString(svg, options)
     
     return svg
 
@@ -260,3 +282,110 @@ if __name__ == "__main__":
     print(len(svg_opt.encode('utf-8')))
 
 
+
+def create_random_svg(
+    canvas_width,
+    canvas_height,
+    num_paths=10,
+    use_blob=False,
+    add_background=True,
+    num_grid_cells=4
+):
+    """Create a random SVG string with paths, possibly using a checkerboard pattern."""
+    # Set up the SVG content
+    svg = f'<svg width="{canvas_width}" height="{canvas_height}" xmlns="http://www.w3.org/2000/svg">\n'
+    
+    # Add a background rectangle if requested
+    if add_background:
+        bg_fill = "url(#gradient)" if random.random() > 0.5 else "#" + ''.join([random.choice('0123456789ABCDEF') for _ in range(6)])
+        svg += f'  <rect width="{canvas_width}" height="{canvas_height}" fill="{bg_fill}" />\n'
+    
+    # Add a gradient definition
+    svg += '  <defs>\n'
+    svg += '    <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">\n'
+    svg += f'      <stop offset="0%" style="stop-color:rgb({random.randint(0,255)},{random.randint(0,255)},{random.randint(0,255)});stop-opacity:1" />\n'
+    svg += f'      <stop offset="100%" style="stop-color:rgb({random.randint(0,255)},{random.randint(0,255)},{random.randint(0,255)});stop-opacity:1" />\n'
+    svg += '    </linearGradient>\n'
+    svg += '  </defs>\n'
+    
+    # Create shapes based on the requested parameters
+    if random.random() > 0.5 and num_grid_cells > 0:
+        # Create a checkerboard pattern
+        cell_width = canvas_width / num_grid_cells
+        cell_height = canvas_height / num_grid_cells
+        
+        for i in range(num_grid_cells):
+            for j in range(num_grid_cells):
+                if (i + j) % 2 == 0:  # Checkerboard pattern
+                    x = i * cell_width
+                    y = j * cell_height
+                    fill = "#" + ''.join([random.choice('0123456789ABCDEF') for _ in range(6)])
+                    
+                    if use_blob:
+                        # Create a random blob with bezier curves
+                        points = []
+                        cx, cy = x + cell_width/2, y + cell_height/2
+                        r = min(cell_width, cell_height) * 0.4
+                        num_points = random.randint(5, 8)
+                        
+                        for k in range(num_points):
+                            angle = 2 * np.pi * k / num_points
+                            px = cx + r * np.cos(angle) * (0.8 + 0.4 * random.random())
+                            py = cy + r * np.sin(angle) * (0.8 + 0.4 * random.random())
+                            points.append(f"{px},{py}")
+                        
+                        svg += f'  <polygon points="{" ".join(points)}" fill="{fill}" />\n'
+                    else:
+                        # Create a simple rectangle
+                        svg += f'  <rect x="{x}" y="{y}" width="{cell_width}" height="{cell_height}" fill="{fill}" />\n'
+    
+    # Add random paths
+    for _ in range(num_paths):
+        if use_blob:
+            # Create closed paths with fills
+            cx, cy = random.uniform(0, canvas_width), random.uniform(0, canvas_height)
+            r = random.uniform(10, min(canvas_width, canvas_height) * 0.2)
+            num_points = random.randint(5, 10)
+            d = "M"
+            
+            for i in range(num_points):
+                angle = 2 * np.pi * i / num_points
+                radius = r * (0.7 + 0.6 * random.random())  # Vary the radius for organic shapes
+                px = cx + radius * np.cos(angle)
+                py = cy + radius * np.sin(angle)
+                
+                if i == 0:
+                    d += f" {px},{py}"
+                else:
+                    # Use bezier curves for more organic shapes
+                    cp1x = prev_x + (px - prev_x) * 0.5 + random.uniform(-r*0.2, r*0.2)
+                    cp1y = prev_y + (py - prev_y) * 0.5 + random.uniform(-r*0.2, r*0.2)
+                    d += f" C {cp1x},{cp1y} {cp1x},{cp1y} {px},{py}"
+                
+                prev_x, prev_y = px, py
+            
+            # Close the path
+            d += " Z"
+            fill = "#" + ''.join([random.choice('0123456789ABCDEF') for _ in range(6)])
+            svg += f'  <path d="{d}" fill="{fill}" />\n'
+        else:
+            # Create open paths with strokes
+            num_points = random.randint(3, 7)
+            d = "M"
+            x, y = random.uniform(0, canvas_width), random.uniform(0, canvas_height)
+            
+            for i in range(num_points):
+                if i == 0:
+                    d += f" {x},{y}"
+                else:
+                    # Add random offsets to create a flowing line
+                    x += random.uniform(-40, 40)
+                    y += random.uniform(-40, 40)
+                    d += f" L {x},{y}"
+            
+            stroke = "#" + ''.join([random.choice('0123456789ABCDEF') for _ in range(6)])
+            stroke_width = random.uniform(1, 10)
+            svg += f'  <path d="{d}" stroke="{stroke}" stroke-width="{stroke_width}" fill="none" />\n'
+    
+    svg += '</svg>'
+    return svg
