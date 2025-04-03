@@ -137,8 +137,9 @@ class VQAEvaluator:
         self.letters = string.ascii_uppercase
         self.model_path = kagglehub.model_download(
             # 'google/paligemma-2/transformers/paligemma2-10b-mix-448'
-            # 'google/paligemma-2/transformers/paligemma2-10b-mix-224'
-            'google/paligemma-2/transformers/paligemma2-3b-mix-224'
+            'google/paligemma-2/transformers/paligemma2-10b-mix-224'
+            # 'google/paligemma-2/transformers/paligemma2-3b-mix-224'
+            # 'google/paligemma-2/transformers/paligemma2-3b-mix-448'
         )
         self.processor = AutoProcessor.from_pretrained(self.model_path)
         self.model = PaliGemmaForConditionalGeneration.from_pretrained(
@@ -159,6 +160,7 @@ class VQAEvaluator:
                     answer_batch,
                 )
             )
+        # print(scores)
         return statistics.mean(scores)
 
     def score_batch(
@@ -536,10 +538,15 @@ class ImageProcessor:
         crop_pixels_w = int(width * crop_percent)
         crop_pixels_h = int(height * crop_percent)
 
-        left = self.rng.randint(0, crop_pixels_w + 1)
-        top = self.rng.randint(0, crop_pixels_h + 1)
-        right = width - self.rng.randint(0, crop_pixels_w + 1)
-        bottom = height - self.rng.randint(0, crop_pixels_h + 1)
+        left = 0
+        top = 0
+        right = width - crop_pixels_w
+        bottom = height - crop_pixels_h
+
+        # left = self.rng.randint(0, crop_pixels_w + 1)
+        # top = self.rng.randint(0, crop_pixels_h + 1)
+        # right = width - self.rng.randint(0, crop_pixels_w + 1)
+        # bottom = height - self.rng.randint(0, crop_pixels_h + 1)
 
         self.image = self.image.crop((left, top, right, bottom))
         self.image = self.image.resize((width, height), Image.BILINEAR)
@@ -548,7 +555,7 @@ class ImageProcessor:
     def apply(self):
         """Apply an ensemble of defenses."""
         return (
-            # self.apply_random_crop_resize(crop_percent=0.03)
+            #self.apply_random_crop_resize(crop_percent=0.03)
             self.apply_jpeg_compression(quality=95)
             .apply_median_filter(size=9)
             .apply_fft_low_pass(cutoff_frequency=0.5)

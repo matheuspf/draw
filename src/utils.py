@@ -205,6 +205,8 @@ def fix_xml_svg(svg_string):
 
 
 def optimize_svg(svg):
+    return svg
+
     # svg = fix_xml_svg(svg)
     # svg = convert_svg_floats_to_ints(svg)
     # svg = optimize_svg_paths(svg)

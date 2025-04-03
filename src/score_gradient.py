@@ -28,9 +28,9 @@ def score_original(
     vqa_score = vqa_score_original(vqa_evaluator, proc_image, questions, choices_list, answers)
     aesthetic_score = aesthetic_score_original(aesthetic_evaluator, proc_image)
     ocr_score = vqa_evaluator.ocr(image)
-    score = harmonic_mean(vqa_score, aesthetic_score, beta=0.5)# * ocr_score
+    score = harmonic_mean(vqa_score, aesthetic_score, beta=0.5) * ocr_score[0]
 
-    return score, vqa_score, aesthetic_score, ocr_score
+    return score, vqa_score, aesthetic_score, ocr_score[0], ocr_score[1]
 
 
 def vqa_score_original(
@@ -143,7 +143,6 @@ def vqa_score_gradient(
     prompts = [evaluator.format_prompt(question, choice) for question, choice in zip(questions, choices_list)]
     inputs = evaluator.processor(
         images=Image.new("RGB", image_shape),
-        # images=Image.open("/home/mpf/code/kaggle/draw/org.png"),
         text=prompts,
         return_tensors="pt",
         padding="longest",
@@ -170,6 +169,10 @@ def vqa_score_gradient(
     answer_probability = choice_probabilities[arange_index, answer_index]
     answer_probability = answer_probability.mean()
 
+    # entropy = -torch.sum(choice_probabilities * torch.log(choice_probabilities + 1e-10), dim=1)
+    # entropy_term = 0.1 * entropy.mean()  # Adjust coefficient as needed
+    # answer_probability = answer_probability.mean() + entropy_term
+
     return answer_probability
 
 
@@ -177,18 +180,32 @@ def score_gradient_ocr(
     evaluator: VQAEvaluator,
     image: torch.Tensor,
     text: str = "",
-    response: str | None = None
+    response: str | None = None,
+    prefix: str = "<image>ocr\n"
 ) -> torch.Tensor:
     # return score_gradient_ocr_1(evaluator, image, text="", response="<eos>  purple pyramids spiraling around a bronze cone")
-    # return score_gradient_ocr_1(evaluator, image, text="\nA", response=None)
-    return score_gradient_ocr_1(evaluator, image, text=text, response=response)
+    # return score_gradient_ocr_1(evaluator, image, text="", response="<eos> crimson rectangles forming a chaotic grid")
+
+
+    # return score_gradient_ocr_1(evaluator, image, text=text, response=response, prefix=prefix)
+    # return score_gradient_ocr_2(evaluator, image, text=text, response=response)
+
+    # return score_gradient_ocr_1(evaluator, image, text="", response=None, prefix=prefix)
+
+    # return score_gradient_ocr_2(evaluator, image, text="", response="www\n", prefix=prefix)
+
+    return score_gradient_ocr_1(evaluator, image, text="", response=None, prefix=prefix)
+
+    return score_gradient_ocr_1(evaluator, image, text="", response="www.", prefix=prefix) \
+            + score_gradient_ocr_1(evaluator, image, text="www.", response=None, prefix=prefix)
 
 
 def score_gradient_ocr_1(
     evaluator: VQAEvaluator,
     image: torch.Tensor,
     text: str = "",
-    response: str | None = None
+    response: str | None = None,
+    prefix: str = "<image>ocr\n"
 ) -> torch.Tensor:
     response = response or evaluator.processor.tokenizer.eos_token
     
@@ -203,7 +220,7 @@ def score_gradient_ocr_1(
 
     inputs = evaluator.processor(
         images=Image.new("RGB", image_shape),
-        text='<image>ocr\n' + text,
+        text=prefix + text,
         return_tensors="pt",
         padding="longest",
     ).to("cuda:0")
@@ -220,49 +237,36 @@ def score_gradient_ocr_1(
     return loss
 
 
-# def score_gradient_ocr_1(
-#     evaluator: VQAEvaluator,
-#     image: torch.Tensor,
-#     text: str = "",
-#     response: str | None = None
-# ) -> torch.Tensor:
-#     response = response or evaluator.processor.tokenizer.eos_token
+def score_gradient_ocr_2(
+    evaluator: VQAEvaluator,
+    image: torch.Tensor,
+    response: str | None = None,
+    prefix: str = "<image>ocr\n"
+) -> torch.Tensor:
+    response = response or evaluator.processor.tokenizer.eos_token
     
-#     image_shape = (
-#         evaluator.processor.image_processor.size["height"],
-#         evaluator.processor.image_processor.size["width"],
-#     )
-#     image = F.interpolate(
-#         image.unsqueeze(0), size=image_shape, mode="bicubic", align_corners=False, antialias=True
-#     )
-#     image = (image - 0.5) / 0.5
+    image_shape = (
+        evaluator.processor.image_processor.size["height"],
+        evaluator.processor.image_processor.size["width"],
+    )
+    image = F.interpolate(
+        image.unsqueeze(0), size=image_shape, mode="bicubic", align_corners=False, antialias=True
+    )
+    image = (image - 0.5) / 0.5
 
-#     inputs_temp = evaluator.processor(
-#         images=Image.new("RGB", image_shape),
-#         text='<image>ocr\n' + text,
-#         return_tensors="pt",
-#         padding="longest",
-#     ).to("cuda:0")
+    inputs = evaluator.processor(
+        images=Image.new("RGB", image_shape),
+        text=prefix,
+        suffix=response,
+        return_tensors="pt",
+        padding="longest",
+    ).to("cuda:0")
+    inputs["pixel_values"] = image
 
-#     inputs = evaluator.processor(
-#         images=Image.new("RGB", image_shape),
-#         text='<image>ocr\n' + text + response,
-#         return_tensors="pt",
-#         padding="longest",
-#     ).to("cuda:0")
+    outputs = evaluator.model(**inputs)
+    loss = outputs.loss
 
-#     inputs["pixel_values"] = image
-#     outputs = evaluator.model(**inputs)
-
-#     response_idx = len(inputs_temp["input_ids"][0])
-#     target_ids = inputs["input_ids"][:, response_idx:]
-#     target_ids = torch.cat([target_ids[0], torch.tensor([evaluator.processor.tokenizer.eos_token_id], device=target_ids.device)], dim=-1).unsqueeze(0)
-#     logits = outputs.logits[:, response_idx - 1:, :]
-
-#     loss = F.cross_entropy(logits[0], target_ids[0])
-    
-#     return loss
-
+    return loss
 
 
 def score_gradient(

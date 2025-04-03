@@ -81,7 +81,7 @@ def render_glyph(glyph, glyph_set, scale, x_position, y_position):
     return path_data, advance_width
 
 
-def render_line(line_idx, svg_count, line, font, glyph_set, scale, x_position, y_position):
+def render_line(line_idx, svg_count, line, font, glyph_set, scale, x_position, y_position, color=(0, 0, 0)):
     """Render a single line of text and return SVG path elements."""
     svg_paths = []
     current_x = x_position
@@ -98,15 +98,9 @@ def render_line(line_idx, svg_count, line, font, glyph_set, scale, x_position, y
         # Render the glyph
         path_data, advance_width = render_glyph(glyph, glyph_set, scale, current_x, y_position)
 
-        # if line_idx == 0 and char_idx == 0:
-        if 1:
-            color = rgb_to_hex(255, 255, 255)
-        else:
-            color = rgb_to_hex(0, 0, 0)
-
         if path_data:
             # Create SVG path element without transform
-            path_element = f'  <path id="text-path-{svg_count + char_idx}" d="{path_data}" fill="{color}" />'
+            path_element = f'  <path id="text-path-{svg_count + char_idx}" d="{path_data}" fill="{rgb_to_hex(*color)}" />'
             svg_paths.append(path_element)
 
         # Move to next character position
@@ -134,6 +128,8 @@ def text_to_svg(
     y_position_frac: float = 0.7,
     line_spacing: float = 1.2,
     font_path: str = "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
+    color: tuple[int, int, int] = (255, 255, 255),
+    font_size: int = None
 ):
     """Convert text to SVG paths using the specified font."""
     # Load the font file
@@ -143,7 +139,7 @@ def text_to_svg(
     
     # font_size = max(int(min(len(text) / 5, 50)), 20)
     
-    font_size = max(min(70, 35 / (len(text) / 50)), 20)
+    font_size = font_size or max(min(70, 30 / (len(text) / 50)), 20)
     
     x_position = x_position_frac * svg_width
     y_position = y_position_frac * svg_height
@@ -172,7 +168,7 @@ def text_to_svg(
 
     for line_idx, line in enumerate(lines):
         # Render the line
-        line_paths = render_line(line_idx, len(all_paths), line, font, glyph_set, scale, x_position, current_y)
+        line_paths = render_line(line_idx, len(all_paths), line, font, glyph_set, scale, x_position, current_y, color)
         all_paths.extend(line_paths)
 
         # Move to next line
