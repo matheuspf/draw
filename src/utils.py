@@ -9,6 +9,8 @@ import io
 from PIL import Image
 import cairosvg
 import scour.scour
+import svgpathtools
+from svgpathtools import svg2paths, wsvg
 
 
 
@@ -205,8 +207,6 @@ def fix_xml_svg(svg_string):
 
 
 def optimize_svg(svg):
-    return svg
-
     # svg = fix_xml_svg(svg)
     # svg = convert_svg_floats_to_ints(svg)
     # svg = optimize_svg_paths(svg)
@@ -219,19 +219,40 @@ def optimize_svg(svg):
     # svg = svg.replace('stroke-width="1"', '')
     # svg = svg.replace('stroke-width="2"', '')
 
-    options = scour.scour.parse_args(['--enable-viewboxing',
-                                 '--enable-id-stripping',
-                                 '--enable-comment-stripping',
-                                 '--shorten-ids',
-                                 '--indent=none',
-                                 '--remove-descriptive-elements',
-                                 '--strip-xml-prolog',
-                                 '--remove-metadata',
-                                 '--enable-comment-stripping',
-                                 '--renderer-workaround',
-                                 '--disable-embed-rasters'])
+    # options = scour.scour.parse_args([
+    #     '--enable-viewboxing',
+    #     '--enable-id-stripping',
+    #     '--enable-comment-stripping',
+    #     '--shorten-ids',
+    #     '--indent=none',
+    #     # '--remove-descriptive-elements',
+    #     # '--strip-xml-prolog',
+    #     # '--remove-metadata',
+    #     # '--enable-comment-stripping',
+    #     # '--renderer-workaround',
+    #     # '--disable-embed-rasters'
+    # ])
+
+
+    options = scour.scour.parse_args([
+        '--enable-viewboxing',
+        '--enable-id-stripping',
+        '--enable-comment-stripping',
+        '--shorten-ids',
+        '--indent=none',
+        '--strip-xml-prolog',
+        '--remove-metadata',
+        '--remove-descriptive-elements',
+        '--disable-embed-rasters',
+        '--enable-viewboxing',
+        '--create-groups',
+        '--renderer-workaround',
+        '--set-precision=2',  # Set decimal precision to 2 places
+    ])
 
     svg = scour.scour.scourString(svg, options)
+    svg = re.sub(r' id=".*?"', '', svg)
+    svg = re.sub(r'>\n', '>', svg)
     
     return svg
 
@@ -390,4 +411,25 @@ def create_random_svg(
             svg += f'  <path d="{d}" stroke="{stroke}" stroke-width="{stroke_width}" fill="none" />\n'
     
     svg += '</svg>'
+    return svg
+
+
+def displace_svg_paths(svg, x_offset, y_offset) -> str:
+    temp_path = "/tmp/temp.svg"
+    with open(temp_path, "w") as f:
+        f.write(svg)
+    
+    paths, attributes, svg_attributes = svgpathtools.svg2paths2(temp_path)
+    displacement = complex(x_offset, y_offset)
+    
+    for i, path in enumerate(paths):
+        paths[i] = path.scaled(0.5).translated(displacement)
+
+    wsvg(paths, attributes=attributes, svg_attributes=svg_attributes, filename=temp_path)
+
+    with open(temp_path) as f:
+        svg = f.read()
+    
+    svg = svg.replace("<defs/>\n", "")
+
     return svg

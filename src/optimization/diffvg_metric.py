@@ -37,7 +37,7 @@ import requests
 import torch
 from PIL import Image
 from tqdm.auto import tqdm
-from src.utils import optimize_svg, svg_to_png, create_random_svg
+from src.utils import optimize_svg, svg_to_png, create_random_svg, displace_svg_paths
 from src.text_to_svg import text_to_svg, rgb_to_hex
 import pydiffvg
 import kagglehub
@@ -314,8 +314,57 @@ def evaluate():
             )
 
         else:
-            with open("output_aest.svg") as f:
+            with open("output_aest_128.svg") as f:
                 svg = f.read()
+            
+            svg = displace_svg_paths(svg, 32, 32)
+
+            svg = svg.strip().split("\n")[2:-1]
+            # for i, s in enumerate(svg):
+            #     if "path" in s:
+            #         svg[i] = s.replace("/>", ' clip-path="url(#cut)" />')
+            svg = [
+                '<defs>',
+                '<clipPath id="cut">',
+                '<rect x="32" y="32" width="64" height="64" />',
+                '</clipPath>',
+                '</defs>',
+                '<g clip-path="url(#cut)">',
+                *svg,
+                '</g>'
+            ]
+            svg = "\n".join(svg)
+            
+            bg_svg = convert_polygons_to_paths(row["svg"])
+            
+            svg_lines = svg.strip().split("\n")
+            bg_lines = bg_svg.strip().split("\n")
+
+            new_lines = bg_lines[:-2] + svg_lines + bg_lines[-2:]
+            svg = "\n".join(new_lines)
+            # svg = optimize_svg(svg)
+            image = svg_to_png_no_resize(svg)
+
+
+            # with open("output_aest_128.svg") as f:
+            #     svg = f.read()
+            
+            # img = svg_to_png_no_resize(svg)#.resize((32, 32))
+            # bg = svg_to_png_no_resize(row["svg"])#.resize((384, 384))
+            
+
+            # bg = torch.from_numpy(np.array(bg)).permute(2, 0, 1).float() / 255.0
+            # img = torch.from_numpy(np.array(img)).permute(2, 0, 1).float() / 255.0  
+            
+            # pos = 64, 64
+            # bg[:, pos[0]:pos[0]+img.shape[1], pos[1]:pos[1]+img.shape[2]] = img
+            # image = Image.fromarray((bg * 255).detach().permute(1, 2, 0).cpu().numpy().astype(np.uint8)).convert("RGB")
+
+            # image.save("output.png")
+            # exit()
+
+            
+
 
         with open("output.svg", "w") as f:
             f.write(svg)
@@ -329,17 +378,17 @@ def evaluate():
 
         print(f"Length SVG Optimized: {len(opt_svg.encode('utf-8'))}")
 
-        image = svg_to_png_no_resize(opt_svg)
-        image.save("output.png")
+        # image = svg_to_png_no_resize(opt_svg)
+        # image.save("output.png")
 
-        score_gen = score_original(
-            vqa_evaluator,
-            aesthetic_evaluator,
-            image,
-            gen_questions_list["questions"],
-            gen_questions_list["choices_list"],
-            gen_questions_list["answers"],
-        )
+        # score_gen = score_original(
+        #     vqa_evaluator,
+        #     aesthetic_evaluator,
+        #     image,
+        #     gen_questions_list["questions"],
+        #     gen_questions_list["choices_list"],
+        #     gen_questions_list["answers"],
+        # )
 
         score_gt = score_original(
             vqa_evaluator,
@@ -350,14 +399,28 @@ def evaluate():
             gt_questions_list["answers"],
         )
 
-        print(f"Score Gen: {score_gen}")
+        # print(f"Score Gen: {score_gen}")
         print(f"Score GT: {score_gt}")
 
         mean_score_gt += score_gt[0]
-        mean_score_gen += score_gen[0]
+        # mean_score_gen += score_gen[0]
 
     print(f"Mean Score GT: {mean_score_gt / len(df)}")
-    print(f"Mean Score Gen: {mean_score_gen / len(df)}")
+    # print(f"Mean Score Gen: {mean_score_gen / len(df)}")
 
 if __name__ == "__main__":
     evaluate()
+
+
+    # df = pd.read_parquet("/home/mpf/code/kaggle/draw/src/subs/train_df.parquet")
+    # svg = convert_polygons_to_paths(df.iloc[0]["svg"])
+    
+    # # with open("output_aest_128.svg") as f:
+    # #     svg = f.read()
+    
+    # svg = optimize_svg(svg)
+
+    # with open("output_opt.svg", "w") as f:
+    #     f.write(svg)
+
+    # print(f"Length SVG Optimized: {len(svg.encode('utf-8'))}")
