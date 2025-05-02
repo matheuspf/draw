@@ -130,50 +130,55 @@ def overlay_images(original_image, visualization, alpha=0.6):
     
     return Image.fromarray(blended)
 
-def display_word_emb(evaluator, image_pil="t1.png", text=""):
+def display_word_emb(evaluator, image_pil="t1.png", prompt_list=["cap en\n", "ocr\n"]):
     image_shape = (
         evaluator.processor.image_processor.size["height"],
         evaluator.processor.image_processor.size["width"],
     )
+    image_feature_size = (32 if image_shape[0] == 448 else 16)
 
     if isinstance(image_pil, (str, Path)):
         image_pil = Image.open(image_pil)
 
     image_pil = image_pil.resize((image_shape[1], image_shape[0]))
-    image = torch.from_numpy(np.array(image_pil)).permute(2, 0, 1).float().to("cuda:0") / 255.0
-    # image = F.interpolate(
-    #     image.unsqueeze(0), size=image_shape, mode="bicubic", align_corners=False, antialias=True
-    # )
-    image = (image - 0.5) / 0.5
 
     
-    inputs = evaluator.processor(
-        images=image_pil,
-        text="<image>\n" + text,
-        return_tensors="pt",
-    ).to("cuda:0")
-
-    image_feature_size = (32 if image_shape[0] == 448 else 16)
+    def decode_tokens(image_tokens):
+        decoded = evaluator.processor.batch_decode(image_tokens.reshape((-1, 1)), skip_special_tokens=True)
+        image_tokens = image_tokens.reshape(image_feature_size, image_feature_size)
+        decoded = [[decoded[i*image_feature_size+j] for j in range(image_feature_size)] for i in range(image_feature_size)]
+        visualization = visualize_tokens(decoded, image_feature_size, block_size=100)
+        overlaid = overlay_images(image_pil, visualization, alpha=0.6)
+        return overlaid
     
-    outputs = evaluator.model(**inputs)
+    with torch.no_grad():
+        image = torch.from_numpy(np.array(image_pil)).permute(2, 0, 1).float().to("cuda:0") / 255.0
+        # image = F.interpolate(
+        #     image.unsqueeze(0), size=image_shape, mode="bicubic", align_corners=False, antialias=True
+        # )
+        image = (image - 0.5) / 0.5
 
-    image_tokens = outputs.logits[0, :image_feature_size**2, :].argmax(dim=-1)
-    decoded = evaluator.processor.batch_decode(image_tokens.reshape((-1, 1)), skip_special_tokens=True)
+        image_features = evaluator.model.get_image_features(image.unsqueeze(0))[0]
+        image_logits = evaluator.model.language_model.lm_head(image_features)
+        image_tokens = image_logits.argmax(dim=-1)
 
-    image_tokens = image_tokens.reshape(image_feature_size, image_feature_size)
-    decoded = [[decoded[i*image_feature_size+j] for j in range(image_feature_size)] for i in range(image_feature_size)]
+    overlay_image = decode_tokens(image_tokens)
+    overlay_image.save("token_visualization_vision.png")
 
-    # Generate token visualization
-    visualization = visualize_tokens(decoded, image_feature_size, block_size=100)
-    visualization.save("token_visualization.png")
-    
-    # Create overlaid version
-    overlaid = overlay_images(image_pil, visualization, alpha=0.6)
-    overlaid.save("token_visualization_overlaid.png")
-    
-    return overlaid, visualization
+    for prompt in tqdm(prompt_list):
+        with torch.no_grad():
+            inputs = evaluator.processor(
+                images=image_pil,
+                text=f"<image>{prompt}",
+                return_tensors="pt",
+            ).to("cuda:0")
 
+            outputs = evaluator.model(**inputs)
+            image_tokens = outputs.logits[0, :image_feature_size**2, :].argmax(dim=-1)
+
+        overlay_image = decode_tokens(image_tokens)
+        overlay_image.save(f"token_visualization_llm_{prompt.strip()}.png")
 
 if __name__ == "__main__":
     evaluator = VQAEvaluator()
-    display_word_emb(evaluator)
+    display_word_emb(evaluator, image_pil="/home/mpf/Downloads/r1.jpg")

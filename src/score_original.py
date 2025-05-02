@@ -336,26 +336,28 @@ class AestheticPredictor(nn.Module):
 
 class AestheticEvaluator:
     def __init__(self):
-        self.model_path = '/kaggle/input/sac-logos-ava1-l14-linearmse/sac+logos+ava1-l14-linearMSE.pth'
-        self.clip_model_path = '/kaggle/input/openai-clip-vit-large-patch14/ViT-L-14.pt'
+        # self.model_path = '/kaggle/input/sac-logos-ava1-l14-linearmse/sac+logos+ava1-l14-linearMSE.pth'
+        # self.clip_model_path = '/kaggle/input/openai-clip-vit-large-patch14/ViT-L-14.pt'
+        self.model_path = str(kagglehub.model_download("jiazhuang/sac-logos-ava1-l14-linearmse/Transformers/default/1", path="sac+logos+ava1-l14-linearMSE.pth"))
+        self.clip_model_path = str(kagglehub.model_download("jiazhuang/clip-vit-large-patch14/Transformers/default/1", path="ViT-L-14.pt"))
         self.predictor, self.clip_model, self.preprocessor = self.load()
 
     def load(self):
         """Loads the aesthetic predictor model and CLIP model."""
-        state_dict = torch.load(self.model_path, weights_only=True, map_location=DEVICE_1)
+        state_dict = torch.load(self.model_path, weights_only=True, map_location=DEVICE_0)
 
         # CLIP embedding dim is 768 for CLIP ViT L 14
         predictor = AestheticPredictor(768)
         predictor.load_state_dict(state_dict)
-        predictor.to(DEVICE_1)
+        predictor.to(DEVICE_0)
         predictor.eval()
-        clip_model, preprocessor = clip.load(self.clip_model_path, device=DEVICE_1)
+        clip_model, preprocessor = clip.load(self.clip_model_path, device=DEVICE_0)
 
         return predictor, clip_model, preprocessor
 
     def score(self, image: Image.Image) -> float:
         """Predicts the CLIP aesthetic score of an image."""
-        image = self.preprocessor(image).unsqueeze(0).to(DEVICE_1)
+        image = self.preprocessor(image).unsqueeze(0).to(DEVICE_0)
 
         with torch.no_grad():
             image_features = self.clip_model.encode_image(image)
@@ -363,7 +365,7 @@ class AestheticEvaluator:
             image_features /= image_features.norm(dim=-1, keepdim=True)
             image_features = image_features.cpu().detach().numpy()
 
-        score = self.predictor(torch.from_numpy(image_features).to(DEVICE_1).float())
+        score = self.predictor(torch.from_numpy(image_features).to(DEVICE_0).float())
 
         return score.item() / 10.0  # scale to [0, 1]
 
@@ -422,6 +424,10 @@ class ImageProcessor:
             self.rng = np.random.RandomState(seed)
         else:
             self.rng = np.random
+
+    def reset(self):
+        self.image = self.original_image.copy()
+        return self
 
     def visualize_comparison(
         self,
@@ -538,15 +544,15 @@ class ImageProcessor:
         crop_pixels_w = int(width * crop_percent)
         crop_pixels_h = int(height * crop_percent)
 
-        left = 0
-        top = 0
-        right = width - crop_pixels_w
-        bottom = height - crop_pixels_h
+        # left = crop_pixels_w
+        # top = crop_pixels_h
+        # right = width
+        # bottom = height
 
-        # left = self.rng.randint(0, crop_pixels_w + 1)
-        # top = self.rng.randint(0, crop_pixels_h + 1)
-        # right = width - self.rng.randint(0, crop_pixels_w + 1)
-        # bottom = height - self.rng.randint(0, crop_pixels_h + 1)
+        left = self.rng.randint(0, crop_pixels_w + 1)
+        top = self.rng.randint(0, crop_pixels_h + 1)
+        right = width - self.rng.randint(0, crop_pixels_w + 1)
+        bottom = height - self.rng.randint(0, crop_pixels_h + 1)
 
         self.image = self.image.crop((left, top, right, bottom))
         self.image = self.image.resize((width, height), Image.BILINEAR)
@@ -556,7 +562,7 @@ class ImageProcessor:
         """Apply an ensemble of defenses."""
         return (
             self \
-            .apply_random_crop_resize(crop_percent=0.03)
+            # .apply_random_crop_resize(crop_percent=0.03)
             .apply_jpeg_compression(quality=95)
             .apply_median_filter(size=9)
             .apply_fft_low_pass(cutoff_frequency=0.5)

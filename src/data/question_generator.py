@@ -1,12 +1,15 @@
 import pandas as pd
+import numpy as np
+import kagglehub
 import json
-from src.data.model import get_model, generate_text
+from src.data.model import get_model_question_gen, generate_text_question_gen
 import random
 
-def load_data():
+def load_data_drawing_with_llms():
     # Load descriptions and questions
-    descriptions_df = pd.read_csv('train.csv')
-    questions_df = pd.read_parquet("/kaggle/input/questions.parquet")
+    drawing_with_llms_path = kagglehub.competition_download('drawing-with-llms')
+    descriptions_df = pd.read_csv(f'{drawing_with_llms_path}/train.csv')
+    questions_df = pd.read_parquet(f'{drawing_with_llms_path}/questions.parquet')
     
     # Create a dictionary with all questions for each ID
     questions_by_id = {}
@@ -73,10 +76,35 @@ def parse_generated_questions(generated_text):
     except Exception as e:
         print(f"Error parsing generated questions: {e}")
         return []
+ 
+ 
+class ModelGenerator:
+    def __init__(self, model_name: str = "Qwen/Qwen2.5-7B-Instruct"):
+        self.model_name = model_name
+        self.model, self.tokenizer = get_model_question_gen(model_name)
+        self.system_prompt = "You are an AI assistant that generates multiple-choice questions for descriptions. Always respond with valid JSON."
+        self.data = load_data_drawing_with_llms()
+
+        few_shot_count = 3
+        np.random.seed(42)
+        np.random.shuffle(self.data)
+        self.few_shot_examples = self.data[:few_shot_count]
+
+    def __call__(self, prompt: str) -> str:
+        full_prompt = create_few_shot_prompt(self.few_shot_examples, prompt)
+        response = generate_text_question_gen(
+            model=self.model,
+            tokenizer=self.tokenizer,
+            prompt=full_prompt,
+            system_prompt=self.system_prompt
+        )
+        generated_questions = parse_generated_questions(response.strip())
+        
+        return response
 
 def main():
     # Load data
-    data = load_data()
+    data = load_data_drawing_with_llms()
     
     # Split data into few-shot examples and test examples
     random.seed(42)
@@ -87,7 +115,7 @@ def main():
     test_examples = data[few_shot_count:]
     
     # Load model
-    model, tokenizer = get_model()
+    model, tokenizer = get_model_question_gen()
     
     # Generate questions for test examples
     system_prompt = "You are an AI assistant that generates multiple-choice questions for descriptions. Always respond with valid JSON."
@@ -99,7 +127,7 @@ def main():
         prompt = create_few_shot_prompt(few_shot_examples[:3], test_example['description'])
         
         # Generate text
-        response = generate_text(
+        response = generate_text_question_gen(
             model=model,
             tokenizer=tokenizer,
             prompt=prompt,

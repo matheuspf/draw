@@ -10,7 +10,10 @@ from PIL import Image
 import cairosvg
 import scour.scour
 import svgpathtools
-from svgpathtools import svg2paths, wsvg
+import svgpathtools
+from svgpathtools import document, wsvg
+import math
+from svgpathtools import Path, Line, CubicBezier, QuadraticBezier, Arc
 
 
 
@@ -203,37 +206,8 @@ def fix_xml_svg(svg_string):
 
 
 
-
-
-
-def optimize_svg(svg):
-    # svg = fix_xml_svg(svg)
-    # svg = convert_svg_floats_to_ints(svg)
-    # svg = optimize_svg_paths(svg)
-    # svg = minify_svg(svg)
-
-    # svg = svg.replace("version='1.0'", "").replace('version="1.0"', "")
-    # svg = svg.replace("version='2.0'", "").replace('version="2.0"', "")
-    # svg = svg.replace('transform=" ', 'transform="')
+def optimize_svg(svg, opacity=None):
     
-    # svg = svg.replace('stroke-width="1"', '')
-    # svg = svg.replace('stroke-width="2"', '')
-
-    # options = scour.scour.parse_args([
-    #     '--enable-viewboxing',
-    #     '--enable-id-stripping',
-    #     '--enable-comment-stripping',
-    #     '--shorten-ids',
-    #     '--indent=none',
-    #     # '--remove-descriptive-elements',
-    #     # '--strip-xml-prolog',
-    #     # '--remove-metadata',
-    #     # '--enable-comment-stripping',
-    #     # '--renderer-workaround',
-    #     # '--disable-embed-rasters'
-    # ])
-
-
     options = scour.scour.parse_args([
         '--enable-viewboxing',
         '--enable-id-stripping',
@@ -251,8 +225,34 @@ def optimize_svg(svg):
     ])
 
     svg = scour.scour.scourString(svg, options)
-    svg = re.sub(r' id=".*?"', '', svg)
-    svg = re.sub(r'>\n', '>', svg)
+    
+    svg = svg.replace('id=""', '')
+    svg = svg.replace('  ', ' ')
+    svg = svg.replace('>\n', '>')
+
+    # svg = re.sub(r' id=".*?"', '', svg)
+    # svg = re.sub(r'>\n', '>', svg)
+
+    
+    # # If opacity is provided, apply it globally and remove individual opacity attributes
+    # if opacity is not None:
+    #     # Parse the SVG
+    #     root = ET.fromstring(svg)
+        
+    #     # Find the topmost g tag with the scaling transform
+    #     for g_elem in root.findall(".//g"):
+    #         if "transform" in g_elem.attrib and "scale" in g_elem.attrib["transform"]:
+    #             # Add the opacity to this g element
+    #             g_elem.set("fill-opacity", str(opacity))
+                
+    #             # Remove all individual fill-opacity attributes from descendants
+    #             for elem in g_elem.iter():
+    #                 if "fill-opacity" in elem.attrib:
+    #                     del elem.attrib["fill-opacity"]
+                
+    #             # Convert back to string
+    #             svg = ET.tostring(root, encoding='unicode')
+    #             break
     
     return svg
 
@@ -290,20 +290,6 @@ def validate_svg(svg, validator):
         valid = False
 
     return valid
-
-
-if __name__ == "__main__":
-    with open('output.svg') as f:
-        svg_org = f.read()
-    
-    svg_opt = optimize_svg(svg_org)
-
-    with open('output_opt5.svg', 'w') as f:
-        f.write(svg_opt)
-
-    print(len(svg_org.encode('utf-8')))
-    print(len(svg_opt.encode('utf-8')))
-
 
 
 def create_random_svg(
@@ -414,7 +400,7 @@ def create_random_svg(
     return svg
 
 
-def displace_svg_paths(svg, x_offset, y_offset) -> str:
+def displace_svg_paths(svg, x_offset = 0, y_offset = 0, scale=0.5) -> str:
     temp_path = "/tmp/temp.svg"
     with open(temp_path, "w") as f:
         f.write(svg)
@@ -423,7 +409,7 @@ def displace_svg_paths(svg, x_offset, y_offset) -> str:
     displacement = complex(x_offset, y_offset)
     
     for i, path in enumerate(paths):
-        paths[i] = path.scaled(0.5).translated(displacement)
+        paths[i] = path.scaled(scale).translated(displacement)
 
     wsvg(paths, attributes=attributes, svg_attributes=svg_attributes, filename=temp_path)
 
@@ -433,3 +419,17 @@ def displace_svg_paths(svg, x_offset, y_offset) -> str:
     svg = svg.replace("<defs/>\n", "")
 
     return svg
+
+
+if __name__ == "__main__":
+    with open('output.svg') as f:
+        svg_org = f.read()
+    
+    svg_opt = optimize_svg(svg_org)
+
+    with open('output_opt.svg', 'w') as f:
+        f.write(svg_opt)
+
+    print(len(svg_org.encode('utf-8')))
+    print(len(svg_opt.encode('utf-8')))
+

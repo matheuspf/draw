@@ -3,9 +3,8 @@ import kornia
 import torch.nn as nn
 import copy
 import random
-import math
 
-# os.environ["TORCH_COMPILE_DISABLE"] = "1"
+os.environ["TORCH_COMPILE_DISABLE"] = "1"
 
 import pandas as pd
 import cv2
@@ -46,42 +45,89 @@ import kagglehub
 from datasets import load_dataset
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
+from bs4 import BeautifulSoup
 
 
 def convert_polygons_to_paths(svg_string):
     """
-    Convert SVG polygon and polyline elements to path elements.
+    Convert SVG polygon, polyline, and rect elements to path elements.
     
     Args:
         svg_string (str): The SVG content as a string
         
     Returns:
-        str: The converted SVG with polygons and polylines replaced by paths
+        str: The converted SVG with polygons, polylines, and rects replaced by paths
     """
+    soup = BeautifulSoup(svg_string, 'xml')
+    
+    # Convert all rect elements to path
+    for rect in soup.find_all('rect'):
+        x = float(rect.get('x', 0))
+        y = float(rect.get('y', 0))
+        width = float(rect.get('width', 0))
+        height = float(rect.get('height', 0))
+        
+        # Create a new path element
+        path = soup.new_tag('path')
+        
+        # Copy all attributes from rect to path
+        for attr, value in rect.attrs.items():
+            if attr not in ['x', 'y', 'width', 'height']:
+                path[attr] = value
+                
+        # Set the path data
+        path['d'] = f"M {x},{y} h {width} v {height} h {-width} z"
+        
+        # Replace rect with path
+        rect.replace_with(path)
+    
+    # Convert polygon and polyline (keeping your original code)
+    result = str(soup)
     import re
     
     # Convert polygon points to path d with closing 'z'
-    svg_string = re.sub(
+    result = re.sub(
         r'<polygon([\w\W]+?)points=(["\'])([\.\d, -]+?)(["\'])', 
         r'<path\1d=\2M\3z\4', 
-        svg_string
+        result
     )
     
     # Convert polyline points to path d without closing
-    svg_string = re.sub(
+    result = re.sub(
         r'<polyline([\w\W]+?)points=(["\'])([\.\d, -]+?)(["\'])', 
         r'<path\1d=\2M\3\4', 
-        svg_string
+        result
     )
     
-    return svg_string
+    return result
+
+
+
+def proc_svg(svg):
+    svg = convert_polygons_to_paths(svg)
+
+    svg_lines = svg.replace(">", ">\n").strip().split("\n")
+    svg_lines = [line for line in svg_lines if line.strip()]
+    initial_lines = svg_lines[:2]
+    svg_lines = svg_lines[2:-2]
+    svg_lines = [line for line in svg_lines if not "<g" in line and not "</g" in line]
+    svg_lines = [(line.replace("/>", ' fill-opacity=".5"/>') if "<path" in line and idx > 0 else line) for idx, line in enumerate(svg_lines)]
+    svg_lines = initial_lines + svg_lines + ["</svg>"]
+
+    svg = "\n".join(svg_lines)
+
+    # svg += text_to_svg("A", x_position_frac=0.9, y_position_frac=0.9, font_size=45, color=(255, 255, 255)).split("\n")[1]
+    svg += text_to_svg("O", x_position_frac=0.6, y_position_frac=0.85, font_size=60, color=(255, 255, 255)).split("\n")[1]
+    svg += text_to_svg("C", x_position_frac=0.75, y_position_frac=0.85, font_size=60, color=(0, 0, 0)).split("\n")[1]
+
+    svg = svg.replace("</svg>", "") + "\n</svg>"
+
+    return svg
 
 
 def load_svg_dataset(split="train", canvas_height=224, canvas_width=224):
 
-    # df = pd.read_parquet("/home/mpf/code/kaggle/draw/src/bkp_subs/train_df_poly_100_bottom.parquet")
-
-    df = pd.read_parquet(kagglehub.dataset_download('tomirol/trainpolyqa', path='train_df_poly_100_bottom.parquet'))
+    df = pd.read_parquet("/home/mpf/code/kaggle/draw/src/bkp_subs/train_df_poly_100_bottom.parquet")
     
     # df_org = pd.read_parquet("/home/mpf/code/kaggle/draw/src/data/generated/qa_dataset_train.parquet")
     # df = df.merge(df_org, on="id", how="left")
@@ -93,22 +139,7 @@ def load_svg_dataset(split="train", canvas_height=224, canvas_width=224):
     svgs_list = []
 
     for svg in svgs:
-        # tag = "</g>"
-        # bg_idx = svg.rfind(tag) + len(tag)
-        # svg = svg[:bg_idx] + "</svg>"
-
-        # with open("output.svg", "w") as f:
-        #     f.write(svg)
-        # exit()
-        
-        svg_lines = svg.replace(">", ">\n").strip().split("\n")
-        svg_lines = svg_lines[:-2]
-        svg = "\n".join(svg_lines)
-        # svg += text_to_svg("A", x_position_frac=0.9, y_position_frac=0.9, font_size=45, color=(255, 255, 255), font_path="/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf").split("\n")[1]
-        svg += text_to_svg("O", x_position_frac=0.6, y_position_frac=0.85, font_size=60, color=(255, 255, 255), font_path="/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf").split("\n")[1]
-        svg += text_to_svg("C", x_position_frac=0.75, y_position_frac=0.85, font_size=60, color=(0, 0, 0), font_path="/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf").split("\n")[1]
-        svg = svg.replace("</svg>", "") + "</svg>"
-        svg = convert_polygons_to_paths(svg)
+        svg = proc_svg(svg)
 
         try:
             png_data = cairosvg.svg2png(bytestring=svg.encode('utf-8'))
@@ -125,6 +156,19 @@ def load_svg_dataset(split="train", canvas_height=224, canvas_width=224):
     return images_list, svgs_list
 
 
+
+def svg_to_png_no_resize_background(svg_code: str, bg_torch: torch.Tensor) -> Image.Image:
+    png_data = cairosvg.svg2png(bytestring=svg_code.encode('utf-8'))
+    img_pil = Image.open(io.BytesIO(png_data)).convert('RGB')
+
+    img = torch.from_numpy(np.array(img_pil)).permute(2, 0, 1).float() / 255.0
+    # img = torch.cat([img, bg_torch], dim=1)
+    pos = 32, 32
+    bg_torch[:, pos[0]:pos[0]+img.shape[1], pos[1]:pos[1]+img.shape[2]] = img
+
+    img_pil = Image.fromarray((bg_torch * 255).detach().permute(1, 2, 0).cpu().numpy().astype(np.uint8)).convert("RGB")
+    
+    return img_pil
 
 
 def svg_to_png_no_resize(svg_code: str) -> Image.Image:
@@ -178,35 +222,6 @@ def seed_everything(seed: int = 42):
     # torch.backends.cudnn.benchmark = False
 
 
-def convert_polygons_to_paths(svg_string):
-    """
-    Convert SVG polygon and polyline elements to path elements.
-    
-    Args:
-        svg_string (str): The SVG content as a string
-        
-    Returns:
-        str: The converted SVG with polygons and polylines replaced by paths
-    """
-    import re
-    
-    # Convert polygon points to path d with closing 'z'
-    svg_string = re.sub(
-        r'<polygon([\w\W]+?)points=(["\'])([\.\d, -]+?)(["\'])', 
-        r'<path\1d=\2M\3z\4', 
-        svg_string
-    )
-    
-    # Convert polyline points to path d without closing
-    svg_string = re.sub(
-        r'<polyline([\w\W]+?)points=(["\'])([\.\d, -]+?)(["\'])', 
-        r'<path\1d=\2M\3\4', 
-        svg_string
-    )
-    
-    return svg_string
-
-
 def get_initial_svg(
     mask: torch.Tensor,
     canvas_width: int = 384,
@@ -219,15 +234,7 @@ def get_initial_svg(
     svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="{canvas_width}" height="{canvas_height}" xmlns:xlink="http://www.w3.org/1999/xlink">\n'
     
     # Add a white background
-    s, e = 32, 96
-    fill = rgb_to_hex(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
-    # svg += f'  <path id="background-0" d="M 0,0 h {canvas_width} v {e} h {-canvas_width} z" fill="{rgb_to_hex(255, 255, 255)}" />\n'
-    svg += f'  <path id="background-0" d="M {s},{s} h {e} v {e} h -{e} z" fill="{fill}" />\n'
-    # svg += f'  <path id="background-0" d="M {s},{s} h {e} v {e} h -{e} z" fill="{fill}" />\n'
-    # svg += f'  <path id="background-1" d="M {canvas_width-s-e},{s} h {e} v {e} h -{e} z" fill="{rgb_to_hex(255, 255, 255)}" />\n'
-    # svg += f'  <path id="background-2" d="M {s},{canvas_height-s-e} h {e} v {e} h -{e} z" fill="{rgb_to_hex(255, 255, 255)}" />\n'
-    # svg += f'  <path id="background-3" d="M {canvas_width-s-e},{canvas_height-s-e} h {e} v {e} h -{e} z" fill="{fill}" />\n'
-
+    svg += f'  <path d="M 0,0 h {canvas_width} v {canvas_height} h {-canvas_width} z" fill="{rgb_to_hex(255, 255, 255)}" />\n'
 
     tile_size_width = canvas_width // (num_tiles * tile_split)
     tile_size_height = canvas_height // (num_tiles * tile_split)
@@ -247,8 +254,8 @@ def get_initial_svg(
             
             fill = rgb_to_hex(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
 
-            points_per_edge = random.randint(1, 5)
-            # points_per_edge = 2
+            # points_per_edge = random.randint(1, 3)
+            points_per_edge = 2
 
             # Create path with more control points
             if points_per_edge <= 1:
@@ -286,73 +293,23 @@ def get_initial_svg(
 
     svg += "</svg>"
 
+    with open("initial_svg.svg", "w") as f:
+        f.write(svg)
+
+    print(f"Initial Length SVG: {len(svg.encode('utf-8'))}")
+    opt_svg = optimize_svg(svg)
+    print(f"Optimized Length SVG: {len(opt_svg.encode('utf-8'))}")
+
     return svg
 
-
-def get_initial_svg_random(
-    mask: torch.Tensor,
-    canvas_width: int = 384,
-    canvas_height: int = 384,
-    num_paths: int = 40,
-    min_vertices: int = 3,
-    max_vertices: int = 8,
-    min_radius: float = 10.0,
-    max_radius: float = 60.0,
-) -> str:
-
-    svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="{canvas_width}" height="{canvas_height}" xmlns:xlink="http://www.w3.org/1999/xlink">\n'
-
-    # svg += f'  <path d="M 0,0 H {canvas_width} V {canvas_height} H 0 Z" fill="{rgb_to_hex(255,255,255)}" />\n'
-
-    mask_np = mask.cpu().numpy()[0]
-    H, W = mask_np.shape
-
-    for i in range(num_paths):
-        # Try to find a centroid within the mask
-        for _ in range(100):
-            cx = random.randint(0, W - 1)
-            cy = random.randint(0, H - 1)
-            if mask_np[cy, cx] > 0.5:
-                break
-        else:
-            continue  # Could not find a valid centroid
-
-        num_vertices = random.randint(min_vertices, max_vertices)
-        angle_offset = random.uniform(0, 2 * math.pi)
-        radius = random.uniform(min_radius, max_radius)
-
-        # Generate polygon vertices
-        points = []
-        for v in range(num_vertices):
-            angle = angle_offset + 2 * math.pi * v / num_vertices
-            r = radius * random.uniform(0.7, 1.3)
-            x = cx + r * math.cos(angle)
-            y = cy + r * math.sin(angle)
-            # Clamp to canvas
-            x = min(max(x, 0), canvas_width - 1)
-            y = min(max(y, 0), canvas_height - 1)
-            points.append((x, y))
-
-        # Build SVG path string
-        path_d = "M " + " ".join(f"{x:.2f},{y:.2f}" for x, y in points) + " Z"
-        fill = rgb_to_hex(random.randint(0,255), random.randint(0,255), random.randint(0,255))
-        svg += f'  <path d="{path_d}" fill="{fill}" />\n'
-
-    svg += "</svg>"
-    return svg
 
 
 def merge_svgs(bg_svg: str, aest_svg: str):
     aest_svg = aest_svg.strip().split("\n")[2:-1]
     # aest_svg = [
-    #     '<defs>',
-    #     '<clipPath id="cut">',
-    #     '<rect x="16" y="16" width="112" height="112" />',
-    #     '</clipPath>',
-    #     '</defs>',
-    #     '<g clip-path="url(#cut)">',
+    #     '<g id="aesthetics" fill-opacity="0.5">',
     #     *aest_svg,
-    #     '</g>'
+    #     "</g>"
     # ]
     aest_svg = "\n".join(aest_svg)
     svg = bg_svg + '\n' + aest_svg
@@ -386,6 +343,7 @@ def optimize_diffvg(
     vqa_evaluator: VQAEvaluator,
     aesthetic_evaluator: AestheticEvaluator,
     target_text: str,
+    svg: str,
     questions: list[str],
     choices_list: list[list[str]],
     answers: list[str],
@@ -396,52 +354,11 @@ def optimize_diffvg(
     num_tiles: int = 12,
     tile_split: int = 4
 ) -> Image.Image:
+    print(f"Target text: {target_text}\n")
+
     pydiffvg.set_use_gpu(torch.cuda.is_available())
 
-    background_images, background_svgs = load_svg_dataset(split="train", canvas_width=canvas_width, canvas_height=canvas_height)
-    background_val_images, background_val_svgs = load_svg_dataset(split="validation", canvas_width=canvas_width, canvas_height=canvas_height)
-    np.random.shuffle(background_images)
-    np.random.shuffle(background_val_images)
-    background_val_images = background_val_images[:50]
-    # background_images = background_val_images
-    # background_images = background_images#[:20]
-    
-    tile_width = canvas_width // num_tiles
-    tile_height = canvas_height // num_tiles
-
-    s, e = 32, 32+96
-    org_mask = torch.zeros((1, canvas_height, canvas_width), dtype=torch.float32, device="cuda:0")
-    # org_mask[:, s:e, :] = 1
-    org_mask[:, s:e, s:e] = 1
-    # org_mask[:, s:e, -e:-s] = 1
-    # org_mask[:, -e:-s, s:e] = 1
-    # org_mask[:, -e:-s, -e:-s] =1
-
-
-    initial_svg = get_initial_svg(org_mask, canvas_width, canvas_height, num_tiles=num_tiles, tile_split=tile_split)
-
-    # initial_svg = get_initial_svg_random(org_mask, canvas_width, canvas_height, num_paths=50, min_vertices=3, max_vertices=10, min_radius=10.0, max_radius=50.0)
-
-    # with open("/home/mpf/code/kaggle/draw/output_aest_650.svg", "r") as f:
-    #     initial_svg = f.read()
-
-
-    with open("initial_svg.svg", "w") as f:
-        f.write(initial_svg)
-
-
-    print(f"Initial Length SVG: {len(initial_svg.encode('utf-8'))}")
-    opt_svg = optimize_svg(initial_svg)
-    print(f"Optimized Length SVG: {len(opt_svg.encode('utf-8'))}")
-
-
-
-    print(f"Num train: {len(background_images)}")
-    print(f"Num eval: {len(background_val_images)}")
-    print(f"Target text: {target_text}")
-
-    # initial_svg = convert_polygons_to_paths(pd.read_parquet("/home/mpf/code/kaggle/draw/src/subs/train_df_poly_100.parquet")["svg"].iloc[2])
-    
+    initial_svg = proc_svg(svg)
 
     temp_svg_path = "/tmp/initial_svg.svg"
     with open(temp_svg_path, "w") as f:
@@ -453,10 +370,9 @@ def optimize_diffvg(
     for text_id in text_path_ids:
         text_settings = settings.undefault(text_id)
         text_settings["paths"]["optimize_points"] = False
-        # text_settings["paths"]["optimize_points"] = True
-        text_settings["optimize_color"] = True
-        text_settings["optimize_alpha"] = True
-        text_settings["optimize_transforms"] = True
+        text_settings["optimize_color"] = False
+        text_settings["optimize_alpha"] = False
+        text_settings["optimize_transforms"] = False
         # text_settings["paths"]["shape_lr"] = 1e-1
         # text_settings["transforms"]["transform_lr"] = 1e-1
         # text_settings["color_lr"] = 1e-2
@@ -468,8 +384,11 @@ def optimize_diffvg(
 
     best_svg = optim_svg.write_xml()
     best_val_loss = -1e8
+    initial_loss = None
     
     grad_accumulation_steps = 1
+
+    
 
     pbar = tqdm(total=num_iterations)
 
@@ -478,81 +397,68 @@ def optimize_diffvg(
         image = optim_svg.render(seed=iter_idx)
         img = image[:, :, :3].permute(2, 0, 1).clamp(0, 1)
 
-        bg = background_images[iter_idx % len(background_images)].to("cuda:0")
-        bg_svg = background_svgs[iter_idx % len(background_svgs)]
-
-        
-        with torch.no_grad():
-            mask = (img < 1e-6).all(dim=0).unsqueeze(0).float()
-        img = img + bg * mask
-
-
-        # img = img * org_mask + bg * (1.0 - org_mask)
-
-
         crop_frac = 0.05
         random_size = int(random.uniform(1.0 - crop_frac, 1.0) * image.shape[1])
         img = kornia.augmentation.RandomCrop((random_size, random_size))(img.unsqueeze(0)).squeeze(0)
 
-        # pos = 32, 32
-        # pos = (pos[0] + random.randint(-10, 10+1), pos[1] + random.randint(-10, 10+1))
-        # bg[:, pos[0]:pos[0]+img.shape[1], pos[1]:pos[1]+img.shape[2]] = img
-
         img = apply_preprocessing_torch(img)
 
         loss = aesthetic_score_gradient(aesthetic_evaluator, img).mean()
-        
-        # norm_loss = 1.0 * ((1.0 - mask) * (1.0 - org_mask)).mean()
-        # loss = - loss + norm_loss
-        # loss = - loss * (1.0 - norm_loss)
 
         if iter_idx == 0 or (iter_idx + 1) % validation_steps == 0:
+            torch.cuda.empty_cache()
             aest_svg = optim_svg.write_xml()
-            val_loss = 0.0
+            loss_total, vqa_loss_total, aest_loss_total, ocr_loss_total = 0.0, 0.0, 0.0, 0.0
             
-            for val_idx, (bg_val, bg_val_svg) in enumerate(zip(background_val_images, background_val_svgs)):
-                torch.cuda.empty_cache()
+            with open("output.svg", "w") as f:
+                f.write(aest_svg)
 
-                cur_svg = optimize_svg(merge_svgs(bg_val_svg, aest_svg))
-
+            num_evals = 4
+            for val_idx in range(num_evals):
+                cur_svg = optimize_svg(aest_svg)
                 pil_image = svg_to_png_no_resize(cur_svg)
 
-                # pil_image = Image.fromarray((img_bkp * 255).detach().permute(1, 2, 0).cpu().numpy().astype(np.uint8)).convert("RGB")
-
-                # pil_image = svg_to_png_no_resize_background(cur_svg, bg_val)
-                # pil_image = svg_to_png_no_resize(cur_svg)
-                # pil_image = Image.fromarray((img * 255).detach().permute(1, 2, 0).cpu().numpy().astype(np.uint8)).convert("RGB")
-
                 pil_image = apply_random_crop_resize_seed(pil_image, crop_percent=0.03, seed=iter_idx)
-                pil_image = ImageProcessor(pil_image).apply().image
-                vl = aesthetic_score_original(aesthetic_evaluator, pil_image)
-                val_loss += vl
 
-            val_loss /= len(background_val_images)
+                val_loss, vqa_val_loss, aest_val_loss, ocr_loss, ocr_text = score_original(
+                    vqa_evaluator,
+                    aesthetic_evaluator,
+                    pil_image,
+                    questions,
+                    choices_list,
+                    answers,
+                )
+                
+                loss_total += val_loss
+                vqa_loss_total += vqa_val_loss
+                aest_loss_total += aest_val_loss
+                ocr_loss_total += ocr_loss
 
-            if val_loss > best_val_loss:
-                best_val_loss = val_loss
-                best_svg = aest_svg
-            
-            with open("output_96.svg", "w") as f:
-                f.write(cur_svg)
-                # f.write(aest_svg)
+            loss_total /= num_evals
+            vqa_loss_total /= num_evals
+            aest_loss_total /= num_evals
+            ocr_loss_total /= num_evals
 
-            # diff = 1e1 * ((1.0 - mask) * (1.0 - org_mask))
-            # diff = (diff.permute(1, 2, 0) * 255).cpu().repeat(1, 1, 3).numpy().astype(np.uint8)
-            # Image.fromarray(diff).convert("RGB").save("diff.png")
+            if initial_loss is None:
+                initial_loss = loss_total
 
+            else:
+                if loss_total > best_val_loss:
+                    best_val_loss = loss_total
+                    best_svg = aest_svg
 
             
         pbar.set_description(
             f"It {iter_idx}/{num_iterations} | "
             f"Loss: {loss.item():.3f} | "
-            # f"Norm Loss: {norm_loss.item():.3f} | "
-            f"Val Loss: {val_loss:.3f} | "
+            f"Val Loss: {loss_total:.3f} | "
+            f"Val VQA Loss: {vqa_loss_total:.3f} | "
+            f"Val Aest Loss: {aest_loss_total:.3f} | "
+            f"Val OCR Loss: {ocr_loss_total:.3f} | "
         )
         pbar.update(1)
 
-        loss = loss / grad_accumulation_steps
+        loss = -loss / grad_accumulation_steps
         loss.backward()
         
         if (iter_idx + 1) % grad_accumulation_steps == 0:
@@ -560,19 +466,23 @@ def optimize_diffvg(
 
     # best_svg = optim_svg.write_xml()
 
+    print("\n", "="*100, "\n")
     print(f"Best loss: {best_val_loss}")
+    print(f"Initial loss: {initial_loss}")
+    print(f"Best loss / Initial loss: {best_val_loss / initial_loss}")
+    print("="*100, "\n\n")
 
-    return best_svg, best_val_loss
+    return best_svg
 
 
 
 def evaluate():
     seed_everything(42)
 
-    vqa_evaluator = None
-    # vqa_evaluator = VQAEvaluator()
-    # vqa_evaluator.model.eval()
-    # vqa_evaluator.model.requires_grad_(False)
+    # vqa_evaluator = None
+    vqa_evaluator = VQAEvaluator()
+    vqa_evaluator.model.eval()
+    vqa_evaluator.model.requires_grad_(False)
 
     aesthetic_evaluator = AestheticEvaluator()
     aesthetic_evaluator.predictor.eval()
@@ -582,37 +492,52 @@ def evaluate():
 
     mean_score_gt = 0
     mean_score_gen = 0
+    
+    df = pd.read_parquet("/home/mpf/code/kaggle/draw/src/bkp_subs/train_df_poly_100_bottom.parquet")
 
-    svg, best_val_loss = optimize_diffvg(
-        vqa_evaluator=None,
-        aesthetic_evaluator=aesthetic_evaluator,
-        target_text="",
-        questions=[],
-        choices_list=[],
-        answers=[],
-        canvas_width=384,
-        canvas_height=384,
-        num_iterations=50000,
-        validation_steps=500,
-        num_tiles=384//16,
-        tile_split=1
-    )
+    # df = pd.read_parquet("/home/mpf/code/kaggle/draw/question_generation_results.parquet")
+    # df = df[df["set"] == "test"].iloc[:1]
 
-    with open(f"output_aest_96_{best_val_loss:.3f}.svg", "w") as f:
-        f.write(svg)
+    # df_svg = pd.read_parquet("/home/mpf/code/kaggle/draw/src/subs/train_df.parquet")
+    # df_svg = df_svg[df_svg["id"].isin(df["id"])]
+    # df_svg = df_svg[["id", "svg"]]
+    # df = df.merge(df_svg, on="id", how="right")
 
-    opt_svg = optimize_svg(svg)
+    for index, row in tqdm(df.iterrows(), total=len(df)):
+        run_optimization = True
+        if run_optimization:
+            svg = optimize_diffvg(
+                vqa_evaluator=vqa_evaluator,
+                aesthetic_evaluator=aesthetic_evaluator,
+                target_text=row["description"],
+                questions=json.loads(row["question"]),
+                choices_list=json.loads(row["choices"]),
+                answers=json.loads(row["answer"]),
+                svg=row["svg"],
+                canvas_width=384,
+                canvas_height=384,
+                num_iterations=1000,
+                validation_steps=200,
+                num_tiles=384//16,
+                tile_split=1,
+            )
 
-    with open("output_opt.svg", "w") as f:
-        f.write(opt_svg)
+        else:
+            with open("output_aest.svg") as f:
+                svg = f.read()
 
-    print(f"Length SVG: {len(opt_svg.encode('utf-8'))}")
+        with open("output_aest.svg", "w") as f:
+            f.write(svg)
 
-    image = svg_to_png_no_resize(opt_svg)
-    image.save("output.png")
+        opt_svg = optimize_svg(svg)
 
+        with open("output_opt.svg", "w") as f:
+            f.write(opt_svg)
 
+        print(f"Length SVG: {len(opt_svg.encode('utf-8'))}")
 
+        image = svg_to_png_no_resize(opt_svg)
+        image.save("output.png")
 
 
 if __name__ == "__main__":

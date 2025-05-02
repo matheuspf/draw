@@ -259,6 +259,26 @@ def optimize_diffvg(
     return best_svg
 
 
+def describe(evaluator, image):
+    inputs = (
+        evaluator.processor(
+            text='<image>describe en\n',
+            images=image,
+            return_tensors='pt',
+        )
+        .to(torch.float16)
+        .to(evaluator.model.device)
+    )
+    input_len = inputs['input_ids'].shape[-1]
+
+    with torch.inference_mode():
+        outputs = evaluator.model.generate(**inputs, max_new_tokens=32, do_sample=False)
+        outputs = outputs[0][input_len:]
+        decoded = evaluator.processor.decode(outputs, skip_special_tokens=True)
+
+    return decoded
+
+
 
 def evaluate():
     seed_everything(42)
@@ -267,34 +287,45 @@ def evaluate():
     aesthetic_evaluator = AestheticEvaluator()
     
     mean_score_gt = 0
+    mean_score_gt_aest = 0
+    mean_score_gt_vqa = 0
     mean_score_gen = 0
 
-    df = pd.read_parquet("/home/mpf/code/kaggle/draw/question_generation_results.parquet")
-    df = df[df["set"] == "test"]#.iloc[:1]
+    # df = pd.read_parquet("/home/mpf/code/kaggle/draw/question_generation_results.parquet")
+    # df = df[df["set"] == "test"]#.iloc[:1]
 
-    df_svg = pd.read_parquet("/home/mpf/code/kaggle/draw/src/subs/train_df.parquet")
-    df_svg = df_svg[df_svg["id"].isin(df["id"])]
-    df_svg = df_svg[["id", "svg"]]
+    # df_svg = pd.read_parquet("/home/mpf/code/kaggle/draw/src/subs/train_df.parquet")
+    # df_svg = df_svg[df_svg["id"].isin(df["id"])]
+    # df_svg = df_svg[["id", "svg"]]
     
-    df = df.merge(df_svg, on="id", how="right")
+    # df = df.merge(df_svg, on="id", how="right")
+    
+    
+    # df = pd.read_parquet("/home/mpf/code/kaggle/draw/src/subs/train_df_multi_100.parquet")
+    df = pd.read_parquet("/home/mpf/code/kaggle/draw/src/subs/train_df_poly_100_bottom.parquet")
+    df = df[df["split"] == "validation"].reset_index(drop=True)
+    # df = df[["id", "svg"]].reset_index(drop=True)
+    # df_org = pd.read_parquet("/home/mpf/code/kaggle/draw/src/data/generated/qa_dataset_train.parquet")
+    # df = df.merge(df_org, on="id", how="left")
+    # df = df[df["split"] == "validation"].reset_index(drop=True)
+
 
     for index, row in tqdm(df.iterrows(), total=len(df)):
         num_ex = 4
         description = row["description"]
         print(description)
 
-        gt_questions_list = {
-            "questions": [dct["question"] for dct in row["ground_truth"]][:num_ex],
-            "choices_list": [dct["choices"].tolist() for dct in row["ground_truth"]][:num_ex],
-            "answers": [dct["answer"] for dct in row["ground_truth"]][:num_ex]
-        }
-        gen_questions_list = {
-            "questions": [dct["question"] for dct in row["generated"]][:num_ex],
-            "choices_list": [dct["choices"].tolist() for dct in row["generated"]][:num_ex],
-            "answers": [dct["answer"] for dct in row["generated"]][:num_ex]
-        }
-        
-        gen_questions_list_inpt = gt_questions_list
+        # gt_questions_list = {
+        #     "questions": [dct["question"] for dct in row["ground_truth"]][:num_ex],
+        #     "choices_list": [dct["choices"].tolist() for dct in row["ground_truth"]][:num_ex],
+        #     "answers": [dct["answer"] for dct in row["ground_truth"]][:num_ex]
+        # }
+        # gen_questions_list = {
+        #     "questions": [dct["question"] for dct in row["generated"]][:num_ex],
+        #     "choices_list": [dct["choices"].tolist() for dct in row["generated"]][:num_ex],
+        #     "answers": [dct["answer"] for dct in row["generated"]][:num_ex]
+        # }
+        # gen_questions_list_inpt = gt_questions_list
 
         run_optimization = False
         if run_optimization:
@@ -304,9 +335,9 @@ def evaluate():
                 target_text=description,
                 # initial_svg=row["svg"],
                 initial_svg=open("/home/mpf/code/kaggle/draw/output_aest.svg").read(),
-                questions=gen_questions_list_inpt["questions"],
-                choices_list=gen_questions_list_inpt["choices_list"],
-                answers=gen_questions_list_inpt["answers"],
+                questions=json.loads(row["question"]),
+                choices_list=json.loads(row["choices"]),
+                answers=json.loads(row["answer"]),
                 canvas_width=384,
                 canvas_height=384,
                 num_iterations=100,
@@ -314,19 +345,20 @@ def evaluate():
             )
 
         else:
-            with open("output_aest_128.svg") as f:
+            with open("output_aest.svg") as f:
                 svg = f.read()
             
-            svg = displace_svg_paths(svg, 32, 32)
+            # svg = displace_svg_paths(svg, 32, 32, scale=1.0)
 
             svg = svg.strip().split("\n")[2:-1]
-            # for i, s in enumerate(svg):
-            #     if "path" in s:
-            #         svg[i] = s.replace("/>", ' clip-path="url(#cut)" />')
             svg = [
                 '<defs>',
                 '<clipPath id="cut">',
                 '<rect x="32" y="32" width="64" height="64" />',
+                # '<rect x="32" y="32" width="32" height="32" />',
+                # '<rect x="32" y="320" width="32" height="32" />',
+                # '<rect x="320" y="32" width="32" height="32" />',
+                # '<rect x="320" y="320" width="32" height="32" />',
                 '</clipPath>',
                 '</defs>',
                 '<g clip-path="url(#cut)">',
@@ -337,14 +369,10 @@ def evaluate():
             
             bg_svg = convert_polygons_to_paths(row["svg"])
             
-            svg_lines = svg.strip().split("\n")
-            bg_lines = bg_svg.strip().split("\n")
-
-            new_lines = bg_lines[:-2] + svg_lines + bg_lines[-2:]
-            svg = "\n".join(new_lines)
-            # svg = optimize_svg(svg)
+            svg = bg_svg + svg
+            svg = svg.replace("</svg>", "") + "</svg>"
+            
             image = svg_to_png_no_resize(svg)
-
 
             # with open("output_aest_128.svg") as f:
             #     svg = f.read()
@@ -394,25 +422,24 @@ def evaluate():
             vqa_evaluator,
             aesthetic_evaluator,
             image,
-            gt_questions_list["questions"],
-            gt_questions_list["choices_list"],
-            gt_questions_list["answers"],
+            json.loads(row["question"]),
+            json.loads(row["choices"]),
+            json.loads(row["answer"]),
         )
-
-        # print(f"Score Gen: {score_gen}")
         print(f"Score GT: {score_gt}")
 
         mean_score_gt += score_gt[0]
-        # mean_score_gen += score_gen[0]
+        mean_score_gt_vqa += score_gt[1]
+        mean_score_gt_aest += score_gt[2]
 
     print(f"Mean Score GT: {mean_score_gt / len(df)}")
-    # print(f"Mean Score Gen: {mean_score_gen / len(df)}")
+    print(f"Mean Score GT VQA: {mean_score_gt_vqa / len(df)}")
+    print(f"Mean Score GT Aest: {mean_score_gt_aest / len(df)}")
 
 if __name__ == "__main__":
     evaluate()
 
-
-    # df = pd.read_parquet("/home/mpf/code/kaggle/draw/src/subs/train_df.parquet")
+    
     # svg = convert_polygons_to_paths(df.iloc[0]["svg"])
     
     # # with open("output_aest_128.svg") as f:

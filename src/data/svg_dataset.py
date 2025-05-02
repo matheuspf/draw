@@ -1,4 +1,5 @@
 from datasets import load_dataset
+from tqdm import tqdm
 import matplotlib.pyplot as plt
 import os
 import io
@@ -78,11 +79,11 @@ def visualize_sample(sample, index=None, save_dir=output_dir):
     fig.tight_layout()
     canvas.print_figure(output_path, dpi=100)
     
-    # Also save raw data as JSON for reference
-    json_data = {k: v for k, v in sample.items() if k != 'Svg'}
-    json_data['SvgLength'] = len(sample['Svg'])
-    with open(save_dir / f"{filename.replace('.png', '.json')}", 'w') as f:
-        json.dump(json_data, f, indent=2)
+    # # Also save raw data as JSON for reference
+    # json_data = {k: v for k, v in sample.items() if k != 'Svg'}
+    # json_data['SvgLength'] = len(sample['Svg'])
+    # with open(save_dir / f"{filename.replace('.png', '.json')}", 'w') as f:
+    #     json.dump(json_data, f, indent=2)
     
     return output_path
 
@@ -90,7 +91,7 @@ def explore_dataset(num_samples=5, start_idx=0, save_dir=output_dir):
     """Explore multiple samples from the dataset."""
     results = []
     
-    for i in range(start_idx, start_idx + num_samples):
+    for i in tqdm(range(start_idx, start_idx + num_samples), total=num_samples):
         if i >= len(dataset["train"]):
             break
         sample = dataset["train"][i]
@@ -150,7 +151,7 @@ if __name__ == "__main__":
     print(f"Example visualization saved to: {output_path}")
     
     print("\nVisualizing samples from the dataset...")
-    paths = explore_dataset(num_samples=50)
+    paths = explore_dataset(num_samples=500)
     print(f"Dataset samples saved to: {', '.join(str(p) for p in paths)}")
     
     print("\nAnalyzing caption statistics...")

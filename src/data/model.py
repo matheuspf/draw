@@ -2,7 +2,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 
-def get_model(model_name: str = "Qwen/Qwen2.5-7B-Instruct"):
+def get_model_question_gen(model_name: str = "Qwen/Qwen2.5-7B-Instruct"):
     quantization_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
@@ -17,7 +17,7 @@ def get_model(model_name: str = "Qwen/Qwen2.5-7B-Instruct"):
     return model, tokenizer
 
 
-def generate_text(
+def generate_text_question_gen(
     model,
     tokenizer,
     prompt: str,

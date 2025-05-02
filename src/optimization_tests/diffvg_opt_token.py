@@ -556,5 +556,3 @@ if __name__ == "__main__":
     # # dct = map_text_to_embeddings(evaluator, text)
     # # print([x[:2] for x in dct])
     # # import pdb; pdb.set_trace()
-
-

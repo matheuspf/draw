@@ -110,12 +110,19 @@ def optimize(
     validation_steps: int = 10,
     learning_rate: float = 1e-1,
 ) -> Image.Image:
+    target_text = target_text[0].upper() + target_text[1:]
+
     vqa_evaluator.model.eval()
     vqa_evaluator.model.requires_grad_(False)
     aesthetic_evaluator.predictor.eval()
     aesthetic_evaluator.predictor.requires_grad_(False)
     aesthetic_evaluator.clip_model.eval()
     aesthetic_evaluator.clip_model.requires_grad_(False)
+
+    image_shape = (
+        vqa_evaluator.processor.image_processor.size["height"],
+        vqa_evaluator.processor.image_processor.size["width"],
+    )
 
     image = get_initial_image(dim=dim)
     optimizer, scheduler = get_optimizer(image, lr=learning_rate)
@@ -125,75 +132,66 @@ def optimize(
 
     pbar = tqdm(total=num_iterations)
 
+    print(f"Description: {target_text}\n\n")
+
     for iter_idx in range(num_iterations):
         optimizer.zero_grad()
-
-        img = image.clamp(0, 1)
-        image_shape = (
-            vqa_evaluator.processor.image_processor.size["height"],
-            vqa_evaluator.processor.image_processor.size["width"],
-        )
-        img = F.interpolate(img.unsqueeze(0), size=image_shape, mode="nearest")[0]
-        # img = F.interpolate(
-        #     img.unsqueeze(0), size=image_shape, mode="bicubic", align_corners=False, antialias=True
-        # )[0]
-        img = (img - 0.5) / 0.5
-        img = apply_preprocessing_torch(img)
-
-        inputs = vqa_evaluator.processor(
-            images=Image.new("RGB", image_shape),
-            text="<image>caption en\n",
-            # text="<image>ocr\n",
-            # text="<image>answer en Question: What does the image show?\n",
-            return_tensors="pt",
-            suffix=target_text,
-        ).to("cuda:0")
-        inputs["pixel_values"] = img.unsqueeze(0)
         
+        prefix_text_list = [
+            # "<image>ocr\n",
+            # "<image>cap en\n",
+            # "<image>caption en\n",
+            # "<image>describe en\n",
+            "<image>answer en Question: What is represented in the image?\n Choices:\n"
+        ]
 
-        # start, step = 1, 1
-        # labels_text = (
-        #     vqa_evaluator.processor.tokenizer("\n".join([target_text] * 1000), return_tensors="pt")
-        #     # vqa_evaluator.processor.tokenizer("describe en\n" + target_text, return_tensors="pt")
-        #     .to("cuda:0")
-        #     .input_ids[0]
-        # )[:len(inputs["input_ids"][0]) - 1]
-        # labels = -100 * torch.ones_like(inputs["input_ids"])
-        # # labels[:, start: start+step*len(labels_text): step] = labels_text
-        # labels[:, -len(labels_text):] = labels_text
-        # inputs["labels"] = labels
-        # inputs["token_type_ids"][...] = 1
-        # inputs["token_type_ids"][inputs["labels"] == -100] = 0
+        for prefix_text in prefix_text_list:
+            img = image.clamp(0, 1)
+            # img = F.interpolate(
+            #     img.unsqueeze(0), size=image_shape, mode="bicubic", align_corners=False, antialias=True
+            # )[0]
+            img = (img - 0.5) / 0.5
+            # img = apply_preprocessing_torch(img)
 
-
-        outputs = vqa_evaluator.model(**inputs)
-        # image_logits = outputs.logits[0, start: start+step*len(labels_text): step]
-        image_logits = outputs.logits[0]
-
-        loss = outputs.loss
-        # loss = F.cross_entropy(image_logits[:-1], labels[0, 1:])
-
-        # loss2 = 1.0 - vqa_score_gradient(vqa_evaluator, image, questions, choices_list, answers)
-        # loss = loss + loss2
-
-        loss.backward()
+            inputs = vqa_evaluator.processor(
+                images=Image.new("RGB", image_shape),
+                text=[prefix_text],
+                return_tensors="pt",
+                suffix=[target_text + "<eos>"],
+            ).to("cuda:0")
+            inputs["pixel_values"] = img.unsqueeze(0)
+            
+            outputs = vqa_evaluator.model(**inputs)
+            loss = outputs.loss / len(prefix_text_list)
+            loss.backward()
 
         if iter_idx == 0 or (iter_idx + 1) % validation_steps == 0:
             with torch.no_grad():
                 vqa_loss = vqa_score_gradient(vqa_evaluator, image, questions, choices_list, answers).item()
 
             torch.cuda.empty_cache()
-            pil_image = torch_to_pil(image).resize((224, 224), Image.Resampling.NEAREST)
+            pil_image = torch_to_pil(image)#.resize((224, 224), Image.Resampling.NEAREST)
             val_loss, vqa_val_loss, aest_val_loss, ocr_loss, ocr_text = score_original(
-                vqa_evaluator, aesthetic_evaluator, pil_image, questions, choices_list, answers,# apply_preprocessing=False
+                vqa_evaluator, aesthetic_evaluator, pil_image, questions, choices_list, answers, apply_preprocessing=False
             )
             ocr_text = ocr_text.replace("\n", "")
-            pred_text = vqa_evaluator.processor.tokenizer.decode(image_logits.argmax(dim=-1)).replace('\n', '')
+
+            # pil_image = ImageProcessor(pil_image).apply().image
+
+            val_prefix_text = prefix_text_list[-1]
+            inputs = vqa_evaluator.processor(
+                images=[pil_image],
+                text=[val_prefix_text],
+                return_tensors="pt",
+            ).to("cuda:0")
+
+            output = vqa_evaluator.model.generate(**inputs, max_new_tokens=128)
+            input_len = len(inputs["input_ids"][0])
+            pred_text = vqa_evaluator.processor.tokenizer.decode(output[0][input_len:]).replace('\n', '')
 
             if vqa_val_loss > best_val_loss:
                 best_val_loss = vqa_val_loss
                 best_img = pil_image
-
 
 
         pbar.set_description(
@@ -204,8 +202,8 @@ def optimize(
             f"Val VQA Loss: {vqa_val_loss:.3f} | "
             # f"Val Aest Loss: {aest_val_loss:.3f} | "
             # f"Val OCR Loss: {ocr_loss:.3f} | "
-            f"OCR Text: `{ocr_text[:10]}` | "
-            f"Pred Text: `{pred_text[:10]}` | "
+            # f"OCR Text: `{ocr_text[:10]}` | "
+            f"Pred Text: `{pred_text[:70]}` | "
         )
         pbar.update(1)
 
@@ -237,9 +235,6 @@ def evaluate():
     average_gt_loss = 0.0
 
     for index, row in tqdm(df.iterrows(), total=len(df)):
-        del vqa_evaluator
-        torch.cuda.empty_cache()
-        vqa_evaluator = VQAEvaluator()
         torch.cuda.empty_cache()
 
         description = row["description"]
@@ -262,17 +257,17 @@ def evaluate():
                 vqa_evaluator=vqa_evaluator,
                 aesthetic_evaluator=aesthetic_evaluator,
                 target_text=description,
-                questions=gen_questions_list["questions"],
-                choices_list=gen_questions_list["choices_list"],
-                answers=gen_questions_list["answers"],
-                num_iterations=200,
-                validation_steps=20,
+                questions=gt_questions_list["questions"],
+                choices_list=gt_questions_list["choices_list"],
+                answers=gt_questions_list["answers"],
+                num_iterations=500,
+                validation_steps=50,
                 learning_rate=1e-2,
-                dim=(3, 224//1, 224//1),
+                dim=(3, 448//2, 448//2),
             )
             image.save("output.png")
 
-        image = Image.open("output.png").resize((224, 224), Image.Resampling.NEAREST)
+        image = Image.open("output.png")#.resize((224, 224), Image.Resampling.NEAREST)
         # image = Image.open("t1.png").resize((384, 384))
 
         score_gen = score_original(
@@ -282,7 +277,7 @@ def evaluate():
             gen_questions_list["questions"],
             gen_questions_list["choices_list"],
             gen_questions_list["answers"],
-            # apply_preprocessing=False,
+            apply_preprocessing=False,
         )
 
         score_gt = score_original(
@@ -292,7 +287,7 @@ def evaluate():
             gt_questions_list["questions"],
             gt_questions_list["choices_list"],
             gt_questions_list["answers"],
-            # apply_preprocessing=False,
+            apply_preprocessing=False,
         )
 
         print(f"Score Gen: {score_gen}")
