@@ -14,6 +14,7 @@ import svgpathtools
 from svgpathtools import document, wsvg
 import math
 from svgpathtools import Path, Line, CubicBezier, QuadraticBezier, Arc
+from picosvg.svg import SVG
 
 
 
@@ -205,9 +206,16 @@ def fix_xml_svg(svg_string):
     return etree.tostring(root, pretty_print=True, encoding='utf-8').decode('utf-8')
 
 
+def optimize_svg_picosvg(svg):
+    svg_instance = SVG.fromstring(svg)
+    svg_instance.topicosvg(inplace=True)
+    return svg_instance.tostring(pretty_print=False)
 
-def optimize_svg(svg, opacity=None):
-    
+def optimize_svg(svg, use_picosvg=False):
+    if use_picosvg:
+        svg = optimize_svg_picosvg(svg)
+
+    # Then, use scour for further minification
     options = scour.scour.parse_args([
         '--enable-viewboxing',
         '--enable-id-stripping',
@@ -218,7 +226,7 @@ def optimize_svg(svg, opacity=None):
         '--remove-metadata',
         '--remove-descriptive-elements',
         '--disable-embed-rasters',
-        '--enable-viewboxing',
+        # '--enable-viewboxing',
         '--create-groups',
         '--renderer-workaround',
         '--set-precision=2',  # Set decimal precision to 2 places
