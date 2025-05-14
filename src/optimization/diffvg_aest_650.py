@@ -80,7 +80,8 @@ def load_svg_dataset(split="train", canvas_height=224, canvas_width=224):
 
     # df = pd.read_parquet("/home/mpf/code/kaggle/draw/src/bkp_subs/train_df_poly_100_bottom.parquet")
 
-    df = pd.read_parquet(kagglehub.dataset_download('tomirol/trainpolyqa', path='train_df_poly_100_bottom.parquet'))
+    # df = pd.read_parquet(kagglehub.dataset_download('tomirol/trainpolyqa', path='train_df_poly_100_bottom.parquet'))
+    df = pd.read_parquet("/home/mpf/code/kaggle/draw/src/subs/train_df_sdxl_vtracer.parquet")
     
     # df_org = pd.read_parquet("/home/mpf/code/kaggle/draw/src/data/generated/qa_dataset_train.parquet")
     # df = df.merge(df_org, on="id", how="left")
@@ -92,22 +93,14 @@ def load_svg_dataset(split="train", canvas_height=224, canvas_width=224):
     svgs_list = []
 
     for svg in svgs:
-        # tag = "</g>"
-        # bg_idx = svg.rfind(tag) + len(tag)
-        # svg = svg[:bg_idx] + "</svg>"
-
-        # with open("output.svg", "w") as f:
-        #     f.write(svg)
-        # exit()
-        
-        svg_lines = svg.replace(">", ">\n").strip().split("\n")
-        svg_lines = svg_lines[:-2]
-        svg = "\n".join(svg_lines)
+        # svg_lines = svg.replace(">", ">\n").strip().split("\n")
+        # svg_lines = svg_lines[:-2]
+        # svg = "\n".join(svg_lines)
         # svg += text_to_svg("A", x_position_frac=0.9, y_position_frac=0.9, font_size=45, color=(255, 255, 255), font_path="/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf").split("\n")[1]
-        svg += text_to_svg("O", x_position_frac=0.6, y_position_frac=0.85, font_size=60, color=(255, 255, 255), font_path="/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf").split("\n")[1]
-        svg += text_to_svg("C", x_position_frac=0.75, y_position_frac=0.85, font_size=60, color=(0, 0, 0), font_path="/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf").split("\n")[1]
-        svg = svg.replace("</svg>", "") + "</svg>"
-        svg = convert_polygons_to_paths(svg)
+        # svg += text_to_svg("O", x_position_frac=0.6, y_position_frac=0.85, font_size=60, color=(255, 255, 255), font_path="/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf").split("\n")[1]
+        # svg += text_to_svg("C", x_position_frac=0.75, y_position_frac=0.85, font_size=60, color=(0, 0, 0), font_path="/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf").split("\n")[1]
+        # svg = svg.replace("</svg>", "") + "</svg>"
+        # svg = convert_polygons_to_paths(svg)
 
         try:
             png_data = cairosvg.svg2png(bytestring=svg.encode('utf-8'))
@@ -124,21 +117,6 @@ def load_svg_dataset(split="train", canvas_height=224, canvas_width=224):
     return images_list, svgs_list
 
 
-
-def svg_to_png_no_resize_background(svg_code: str, bg_torch: torch.Tensor) -> Image.Image:
-    png_data = cairosvg.svg2png(bytestring=svg_code.encode('utf-8'))
-    img_pil = Image.open(io.BytesIO(png_data)).convert('RGB')
-
-    img = torch.from_numpy(np.array(img_pil)).permute(2, 0, 1).float() / 255.0
-    # img = torch.cat([img, bg_torch], dim=1)
-    pos = 32, 32
-    bg_torch[:, pos[0]:pos[0]+img.shape[1], pos[1]:pos[1]+img.shape[2]] = img
-
-    img_pil = Image.fromarray((bg_torch * 255).detach().permute(1, 2, 0).cpu().numpy().astype(np.uint8)).convert("RGB")
-    
-    return img_pil
-
-
 def svg_to_png_no_resize(svg_code: str) -> Image.Image:
     png_data = cairosvg.svg2png(bytestring=svg_code.encode('utf-8'))
     img_pil = Image.open(io.BytesIO(png_data)).convert('RGB')
@@ -150,7 +128,7 @@ def get_optimization_settings():
     # Create optimization settings
     settings = pydiffvg.SvgOptimizationSettings()
 
-    lr = 5e-3
+    lr = 1e-2
 
     # Configure optimization settings
     settings.global_override(["optimizer"], "Adam")
@@ -229,14 +207,15 @@ def get_initial_svg(
 ):
     # Start with the SVG header
     svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="{canvas_width}" height="{canvas_height}" xmlns:xlink="http://www.w3.org/1999/xlink">\n'
+
+    fill = rgb_to_hex(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
     
     # Add a white background
     # svg += f'  <path d="M 0,0 h {canvas_width} v 64 h {-canvas_width} z" fill="{rgb_to_hex(255, 255, 255)}" />\n'
-    s, e = 32, 96
-    svg += f'  <path id="background-0" d="M {s},{s} h {e} v {e} h -{e} z" fill="{rgb_to_hex(255, 255, 255)}" />\n'
-    # svg += f'  <path id="background-0" d="M {s},{s} h {e} v {e} h -{e} z" fill="{rgb_to_hex(255, 255, 255)}" />\n'
+    s, e = 24, 96
+    svg += f'  <path id="background-0" d="M {s},{s} h {e} v {e} h -{e} z" fill="{fill}" />\n'
     # svg += f'  <path id="background-1" d="M {canvas_width-s-e},{s} h {e} v {e} h -{e} z" fill="{rgb_to_hex(255, 255, 255)}" />\n'
-    # svg += f'  <path id="background-2" d="M {s},{canvas_height-s-e} h {e} v {e} h -{e} z" fill="{rgb_to_hex(255, 255, 255)}" />\n'
+    # svg += f'  <path id="background-2" d="M {s},{canvas_height-s-e} h {e} v {e} h -{e} z" fill="{fill}" />\n'
     # svg += f'  <path id="background-3" d="M {canvas_width-s-e},{canvas_height-s-e} h {e} v {e} h -{e} z" fill="{rgb_to_hex(255, 255, 255)}" />\n'
 
     tile_size_width = canvas_width // (num_tiles * tile_split)
@@ -257,8 +236,8 @@ def get_initial_svg(
             
             fill = rgb_to_hex(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
 
-            points_per_edge = random.randint(1, 5)
-            # points_per_edge = 2
+            # points_per_edge = random.randint(1, 5)
+            points_per_edge = 4
 
             # Create path with more control points
             if points_per_edge <= 1:
@@ -294,6 +273,8 @@ def get_initial_svg(
     # text_svg = text_to_svg("A", svg_width=canvas_width, svg_height=canvas_height, color=(255, 255, 255), x_position_frac=0.1, y_position_frac=0.2, font_size=50)
     # svg += "\n".join(text_svg.split("\n")[1:-1])
 
+    # svg += text_to_svg("O", x_position_frac=0.6, y_position_frac=0.85, font_size=60, color=(255, 255, 255), font_path="/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf").split("\n")[1]
+    # svg += text_to_svg("C", x_position_frac=0.75, y_position_frac=0.85, font_size=60, color=(0, 0, 0), font_path="/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf").split("\n")[1]
     svg += "</svg>"
 
     with open("initial_svg.svg", "w") as f:
@@ -340,6 +321,15 @@ def apply_random_crop_resize_seed(image: Image.Image, crop_percent=0.05, seed=42
     return image
 
 
+def clamp_svg_to_mask(svg_root, s, e):
+    def clamp_node(node):
+        if hasattr(node, 'paths'):
+            for path in getattr(node, 'paths', []):
+                path.points.data[:, 0].clamp_(s, e - 1e-3)
+                path.points.data[:, 1].clamp_(s, e - 1e-3)
+        for child in getattr(node, 'children', []):
+            clamp_node(child)
+    clamp_node(svg_root)
 
 
 def optimize_diffvg(
@@ -369,7 +359,7 @@ def optimize_diffvg(
     tile_width = canvas_width // num_tiles
     tile_height = canvas_height // num_tiles
 
-    s, e = 32, 32+96
+    s, e = 24, 24+96
     mask = torch.zeros((3, canvas_height, canvas_width), dtype=torch.float32, device="cuda:0")
     mask[:, s:e, s:e] = 1
     # mask[:, s:e, -e:-s] = 1
@@ -486,12 +476,14 @@ def optimize_diffvg(
         
         if (iter_idx + 1) % grad_accumulation_steps == 0:
             optim_svg.step()
+            clamp_svg_to_mask(optim_svg.root, max(s-16, 0), min(e+16, canvas_width))
+            # clamp_svg_to_mask(optim_svg.root, 16, 384-96-32-16, 32+96+16, 384-16)
 
     # best_svg = optim_svg.write_xml()
 
     print(f"Best loss: {best_val_loss}")
 
-    return best_svg
+    return best_svg, best_val_loss
 
 
 
@@ -512,7 +504,7 @@ def evaluate():
     mean_score_gt = 0
     mean_score_gen = 0
 
-    svg = optimize_diffvg(
+    svg, score = optimize_diffvg(
         vqa_evaluator=None,
         aesthetic_evaluator=aesthetic_evaluator,
         target_text="",
@@ -521,13 +513,13 @@ def evaluate():
         answers=[],
         canvas_width=384,
         canvas_height=384,
-        num_iterations=50000,
+        num_iterations=20000,
         validation_steps=500,
-        num_tiles=384//16,
+        num_tiles=384//24,
         tile_split=1
     )
 
-    with open("output.svg", "w") as f:
+    with open(f"output_vtracer_96_bottom_{score:.3f}.svg", "w") as f:
         f.write(svg)
 
     opt_svg = optimize_svg(svg)

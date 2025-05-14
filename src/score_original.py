@@ -23,8 +23,8 @@ from transformers import (
 
 svg_constraints = kagglehub.package_import('metric/svg-constraints', bypass_confirmation=True)
 
-DEVICE_0 = "cuda:0"
-DEVICE_1 = "cuda:1" if torch.cuda.device_count() > 1 else DEVICE_0
+DEVICE_0 = f"cuda:{max(0, torch.cuda.device_count() - 2)}"
+DEVICE_1 = f"cuda:{max(0, torch.cuda.device_count() - 1)}"
 
 class ParticipantVisibleError(Exception):
     pass
@@ -146,7 +146,7 @@ class VQAEvaluator:
             self.model_path,
             low_cpu_mem_usage=True,
             quantization_config=self.quantization_config,
-        ).to(DEVICE_0)
+        ).to(DEVICE_1)
 
     def score(self, questions, choices, answers, image, n=4):
         scores = []
@@ -249,7 +249,7 @@ class VQAEvaluator:
             text=prompts,
             return_tensors='pt',
             padding='longest',
-        ).to(DEVICE_0)
+        ).to(DEVICE_1)
 
         with torch.no_grad():
             outputs = self.model(**inputs)
@@ -344,20 +344,20 @@ class AestheticEvaluator:
 
     def load(self):
         """Loads the aesthetic predictor model and CLIP model."""
-        state_dict = torch.load(self.model_path, weights_only=True, map_location=DEVICE_0)
+        state_dict = torch.load(self.model_path, weights_only=True, map_location=DEVICE_1)
 
         # CLIP embedding dim is 768 for CLIP ViT L 14
         predictor = AestheticPredictor(768)
         predictor.load_state_dict(state_dict)
-        predictor.to(DEVICE_0)
+        predictor.to(DEVICE_1)
         predictor.eval()
-        clip_model, preprocessor = clip.load(self.clip_model_path, device=DEVICE_0)
+        clip_model, preprocessor = clip.load(self.clip_model_path, device=DEVICE_1)
 
         return predictor, clip_model, preprocessor
 
     def score(self, image: Image.Image) -> float:
         """Predicts the CLIP aesthetic score of an image."""
-        image = self.preprocessor(image).unsqueeze(0).to(DEVICE_0)
+        image = self.preprocessor(image).unsqueeze(0).to(DEVICE_1)
 
         with torch.no_grad():
             image_features = self.clip_model.encode_image(image)
@@ -365,7 +365,7 @@ class AestheticEvaluator:
             image_features /= image_features.norm(dim=-1, keepdim=True)
             image_features = image_features.cpu().detach().numpy()
 
-        score = self.predictor(torch.from_numpy(image_features).to(DEVICE_0).float())
+        score = self.predictor(torch.from_numpy(image_features).to(DEVICE_1).float())
 
         return score.item() / 10.0  # scale to [0, 1]
 

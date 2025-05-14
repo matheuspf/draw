@@ -10,7 +10,6 @@ from PIL import Image
 import cairosvg
 import scour.scour
 import svgpathtools
-import svgpathtools
 from svgpathtools import document, wsvg
 import math
 from svgpathtools import Path, Line, CubicBezier, QuadraticBezier, Arc
