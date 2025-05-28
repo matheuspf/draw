@@ -1,6 +1,6 @@
-### 5th place solution for [Kaggle Draw](https://www.kaggle.com/competitions/drawing-with-llms)
+### 5th place solution for [Kaggle SVG Drawing with LLMs](https://www.kaggle.com/competitions/drawing-with-llms)
 
-This is my 5th place solution for the [Kaggle Draw](https://www.kaggle.com/competitions/drawing-with-llms) competition.
+This is my 5th place solution for the [Kaggle SVG Drawing with LLMs](https://www.kaggle.com/competitions/drawing-with-llms) competition.
 
 TODO...
 
