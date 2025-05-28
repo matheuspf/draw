@@ -39,53 +39,9 @@ def harmonic_mean_grad(a: torch.Tensor, b: torch.Tensor, beta: float = 1.0, eps:
     return numerator / denominator
 
 
-# def vqa_yes_probability(vqa_evaluator, image, description, img_size=(224, 224)):
-#     # prompt = f"<image>answer en Question: Does this image contain {description}? Answer Yes or No.\nAnswer:"
-#     prompt = description
-#     inputs = vqa_evaluator.processor(
-#         images=Image.new("RGB", img_size),
-#         text=[prompt],
-#         return_tensors="pt",
-#     ).to("cuda:0")
-
-#     img = F.interpolate(image.unsqueeze(0), size=img_size, mode="bicubic", align_corners=False, antialias=True)
-#     img = (img - 0.5) / 0.5
-#     inputs["pixel_values"] = img
-
-#     outputs = vqa_evaluator.model(**inputs)
-#     logits = outputs.logits[:, -1, :]  # Get logits for the last token
-    
-#     # Get token IDs for "Yes" and " Yes" (with space)
-#     yes_token = vqa_evaluator.processor.tokenizer.encode("Yes", add_special_tokens=False)[0]
-#     yes_token_with_space = vqa_evaluator.processor.tokenizer.encode(" Yes", add_special_tokens=False)[0]
-    
-#     # Create masked logits with only the relevant tokens
-#     masked_logits = torch.full_like(logits, float('-inf'))
-#     masked_logits[0, yes_token] = logits[0, yes_token]
-#     masked_logits[0, yes_token_with_space] = logits[0, yes_token_with_space]
-    
-#     # Get token IDs for "No" and " No" (with space)
-#     no_token = vqa_evaluator.processor.tokenizer.encode("No", add_special_tokens=False)[0]
-#     no_token_with_space = vqa_evaluator.processor.tokenizer.encode(" No", add_special_tokens=False)[0]
-    
-#     # Add "No" tokens to masked logits
-#     masked_logits[0, no_token] = logits[0, no_token]
-#     masked_logits[0, no_token_with_space] = logits[0, no_token_with_space]
-    
-#     # Apply softmax to get probabilities
-#     probabilities = torch.softmax(masked_logits, dim=-1)
-    
-#     # Calculate total probability of "Yes"
-#     yes_prob = probabilities[0, yes_token] + probabilities[0, yes_token_with_space]
-    
-#     return yes_prob
-
-
-
-
 def vqa_yes_probability(vqa_evaluator, image, prompts):
     # img_size = (224, 224) if "224" in vqa_evaluator.model_id else (448, 448)
-    img_size = (224, 224)
+    img_size = (448, 448)
     inputs = vqa_evaluator.processor(
         images=[Image.new("RGB", img_size)] * len(prompts),
         text=prompts,

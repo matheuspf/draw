@@ -300,6 +300,18 @@ def apply_random_crop_resize_seed(image: Image.Image, crop_percent=0.05, seed=42
     return image
 
 
+def clamp_svg_canvas(svg_root, width, height):
+    def clamp_node(node):
+        if hasattr(node, 'paths'):
+            for path in getattr(node, 'paths', []):
+                path.points.data[:, 0].clamp_(0, width - 1e-3)
+                path.points.data[:, 1].clamp_(0, height - 1e-3)
+        for child in getattr(node, 'children', []):
+            clamp_node(child)
+    clamp_node(svg_root)
+
+    return svg_root
+
 def optimize_diffvg(
     aesthetic_evaluator: AestheticEvaluator,
     width: int = 96,
@@ -360,31 +372,25 @@ def optimize_diffvg(
         bg[:, pos_y:pos_y+img.shape[1], pos_x:pos_x+img.shape[2]] = img
         img = bg
 
+        if iter_idx > 1000:
+            # if np.random.rand() < 0.25:
+            #     xx = np.random.rand()
+            #     if xx < 1/4:
+            #         img = img[:, :int(384*0.97), :int(384*0.97)]
+            #     elif xx < 2/4:
+            #         img = img[:, -int(384*0.97):, :int(384*0.97)]
+            #     elif xx < 3/4:
+            #         img = img[:, :int(384*0.97), -int(384*0.97):]
+            #     else:
+            #         img = img[:, -int(384*0.97):, -int(384*0.97):]
+            #     img = img.unsqueeze(0)
 
-        crop_frac = 0.05
-        random_size = int(random.uniform(1.0 - crop_frac, 1.0) * img.shape[1])
+            # else:
+            crop_frac = 0.05
+            random_size = int(random.uniform(1.0 - crop_frac, 1.0) * img.shape[1])
+            img = kornia.augmentation.RandomCrop((384, 384))(img.unsqueeze(0))
 
-        xx = np.random.rand()
-
-        if xx < 1/4:
-            img = img[:, :int(384*0.97), :int(384*0.97)]
-        elif xx < 2/4:
-            img = img[:, -int(384*0.97):, :int(384*0.97)]
-        elif xx < 3/4:
-            img = img[:, :int(384*0.97), -int(384*0.97):]
-        else:
-            img = img[:, -int(384*0.97):, -int(384*0.97):]
-        
-        
-        # img0 = img[:, :int(384*0.97), :int(384*0.97)]
-        # img1 = img[:, -int(384*0.97):, :int(384*0.97)]
-        # img2 = img[:, :int(384*0.97), -int(384*0.97):]
-        # img3 = img[:, -int(384*0.97):, -int(384*0.97):]
-        # img = torch.cat([img0, img1, img2, img3], dim=2)
-        # img = kornia.augmentation.RandomCrop((random_size, random_size))(img)
-        
-        img = kornia.augmentation.RandomCrop((random_size, random_size))(img.unsqueeze(0))
-        img = F.interpolate(img, size=(384, 384), mode="bicubic", align_corners=False, antialias=True).squeeze(0)
+            img = F.interpolate(img, size=(384, 384), mode="bicubic", align_corners=False, antialias=True).squeeze(0)
 
         img = apply_preprocessing_torch(img)
 
@@ -402,7 +408,7 @@ def optimize_diffvg(
 
                 # pil_image = Image.fromarray((img * 255).detach().permute(1, 2, 0).cpu().numpy().astype(np.uint8)).convert("RGB")
 
-                pil_image = apply_random_crop_resize_seed(pil_image, crop_percent=0.03, seed=iter_idx)
+                pil_image = apply_random_crop_resize_seed(pil_image, crop_percent=0.03, seed=val_idx)
                 pil_image = ImageProcessor(pil_image, crop=False).apply().image
                 vl = aesthetic_evaluator.score(image=pil_image)
                 val_loss += vl
@@ -428,6 +434,7 @@ def optimize_diffvg(
         
         if (iter_idx + 1) % grad_accumulation_steps == 0:
             optim_svg.step()
+            optim_svg = clamp_svg_canvas(optim_svg, width, height)
 
     # best_svg = optim_svg.write_xml()
 

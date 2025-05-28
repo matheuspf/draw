@@ -54,8 +54,8 @@ class VTracerConfig(BaseModel):
     tolerance: float = 5.0
     preserve_topology: bool = True
     simplify_poligons: bool = True
-    min_bytes: int = 9500
-    # min_bytes: int = 5250
+    # min_bytes: int = 9500
+    min_bytes: int = 6000
 
 
 def path_area(path: svgpathtools.Path) -> float:
@@ -69,6 +69,9 @@ def path_area(path: svgpathtools.Path) -> float:
     return area
 
 def remove_smallest_paths_svg(svg: str, min_bytes: int = 10000) -> str:
+    if len(svg.encode('utf-8')) < min_bytes:
+        return svg
+
     # Write SVG to a temp file for svgpathtools
     with tempfile.NamedTemporaryFile(delete=False, suffix=".svg") as tmp:
         tmp.write(svg.encode('utf-8'))
@@ -104,9 +107,9 @@ def remove_smallest_paths_svg(svg: str, min_bytes: int = 10000) -> str:
         # candidate_svg = candidate_svg.replace("<defs/>\n", "")
 
         if len(candidate_svg_opt.encode('utf-8')) > min_bytes:
-            best_svg = candidate_svg
             right = mid - 1
         else:
+            best_svg = candidate_svg
             left = mid + 1
 
     os.remove(temp_path)

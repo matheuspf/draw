@@ -61,7 +61,10 @@ def convert_polygons_to_paths(svg_string):
 
 
 def load_svg_dataset(split="train", canvas_height=384, canvas_width=384):
-    df = pd.read_parquet("/home/mpf/code/kaggle/draw/src/subs/train_df_sdxl_vtracer.parquet")
+    # df = pd.read_parquet("/home/mpf/code/kaggle/draw/src/subs/train_df_sdxl_vtracer.parquet")
+    df = pd.read_parquet("/home/mpf/code/kaggle/draw/sub_reno_pali_3b_224.parquet")
+    # df = pd.read_parquet("/home/mpf/code/kaggle/draw/sub_reno_imagereward_aest.parquet")
+    
     df = df[df["split"] == split].reset_index(drop=True)
 
     svgs = df["svg"].tolist()
@@ -72,9 +75,18 @@ def load_svg_dataset(split="train", canvas_height=384, canvas_width=384):
         svg_lines = svg.replace(">", ">\n").strip().split("\n")
         svg_lines = svg_lines[:-2]
         svg = "\n".join(svg_lines)
-        svg += text_to_svg("O", x_position_frac=0.8, y_position_frac=0.9, font_size=60, color=(0, 0, 0), font_path="/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf").split("\n")[1]
+
+        x_position_frac = 0.85
+        y_position_frac = 0.9
+        x_pos = int(canvas_width * (x_position_frac))
+        y_pos = int(canvas_height * (y_position_frac))
+        sz = 24
+        svg += f'<path id="text-path-5" d="M {int(x_pos-sz/8)},{int(y_pos-sz*4/5)} h {sz} v {sz} h -{sz} z" fill="{rgb_to_hex(0, 0, 0)}" />\n'
+        svg += text_to_svg("O", x_position_frac=x_position_frac, y_position_frac=y_position_frac, font_size=24, color=(255, 255, 255), font_path="/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf").split("\n")[1]
+        # svg += text_to_svg("O", x_position_frac=0.8, y_position_frac=0.9, font_size=60, color=(0, 0, 0), font_path="/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf").split("\n")[1]
         svg = svg.replace("</svg>", "") + "</svg>"
         svg = convert_polygons_to_paths(svg)
+        # svg = optimize_svg(svg)
 
         png_data = cairosvg.svg2png(bytestring=svg.encode('utf-8'))
         img = Image.open(io.BytesIO(png_data)).convert('RGB')
@@ -109,23 +121,23 @@ def get_optimization_settings():
     settings.global_override(["circles", "shape_lr"], 10*lr)
     settings.global_override(["transforms", "transform_lr"], 10*lr)
     
-    # Configure gradient optimization settings
-    settings.global_override(["gradients", "optimize_stops"], True)
-    settings.global_override(["gradients", "stop_lr"], lr)
-    settings.global_override(["gradients", "optimize_color"], True)
-    settings.global_override(["gradients", "color_lr"], lr)
-    settings.global_override(["gradients", "optimize_alpha"], True)
-    settings.global_override(["gradients", "alpha_lr"], lr)
-    settings.global_override(["gradients", "optimize_location"], True)
-    settings.global_override(["gradients", "location_lr"], 10*lr)
+    # # Configure gradient optimization settings
+    # settings.global_override(["gradients", "optimize_stops"], True)
+    # settings.global_override(["gradients", "stop_lr"], lr)
+    # settings.global_override(["gradients", "optimize_color"], True)
+    # settings.global_override(["gradients", "color_lr"], lr)
+    # settings.global_override(["gradients", "optimize_alpha"], True)
+    # settings.global_override(["gradients", "alpha_lr"], lr)
+    # settings.global_override(["gradients", "optimize_location"], True)
+    # settings.global_override(["gradients", "location_lr"], 10*lr)
 
     # For filled shapes, optimize colors and transforms
     settings.global_override(["optimize_color"], True)
     settings.global_override(["optimize_alpha"], True)
     settings.global_override(["paths", "optimize_points"], True)
-    settings.global_override(["circles", "optimize_center"], True)
-    settings.global_override(["circles", "optimize_radius"], True)
-    settings.global_override(["transforms", "optimize_transforms"], True)
+    # settings.global_override(["circles", "optimize_center"], True)
+    # settings.global_override(["circles", "optimize_radius"], True)
+    # settings.global_override(["transforms", "optimize_transforms"], True)
 
     return settings
 
@@ -178,6 +190,7 @@ def get_initial_svg(
     fill = rgb_to_hex(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
     
     svg += f'  <path id="background-0" d="M 0,0 h {width} v {height} h -{width} z" fill="{fill}" />\n'
+    # svg += f'  <path d="M 0,0 h {width} v {height} h -{width} z" fill="{fill}" />\n'
 
     assert width % tile_size == 0
     assert height % tile_size == 0
@@ -201,7 +214,7 @@ def get_initial_svg(
             # Create path with more control points
             if points_per_edge <= 1:
                 # Original rectangle with 4 points
-                svg += f'  <path d="M {x},{y} h {width} v {height} h {-width} z" fill="{fill}" />\n'
+                svg += f'  <path d="M {x},{y} h {width} v {height} h {-width} z" fill="{fill}" fill-opacity="1.0" />\n'
             else:
                 # Rectangle with subdivided edges for more control points
                 path_data = f"M {x},{y} "
@@ -287,6 +300,18 @@ def apply_random_crop_resize_seed(image: Image.Image, crop_percent=0.05, seed=42
     return image
 
 
+def clamp_svg_canvas(svg_root, width, height):
+    def clamp_node(node):
+        if hasattr(node, 'paths'):
+            for path in getattr(node, 'paths', []):
+                path.points.data[:, 0].clamp_(0, width - 1e-3)
+                path.points.data[:, 1].clamp_(0, height - 1e-3)
+        for child in getattr(node, 'children', []):
+            clamp_node(child)
+    clamp_node(svg_root)
+
+    return svg_root
+
 def optimize_diffvg(
     aesthetic_evaluator: AestheticEvaluator,
     width: int = 96,
@@ -322,6 +347,8 @@ def optimize_diffvg(
     for text_id in text_path_ids:
         text_settings = settings.undefault(text_id)
         text_settings["paths"]["optimize_points"] = False
+        text_settings["paths"]["optimize_color"] = True
+        text_settings["paths"]["optimize_alpha"] = True
 
     optim_svg = pydiffvg.OptimizableSvg(
         temp_svg_path, settings, optimize_background=False, verbose=False, device="cuda:0"
@@ -345,14 +372,25 @@ def optimize_diffvg(
         bg[:, pos_y:pos_y+img.shape[1], pos_x:pos_x+img.shape[2]] = img
         img = bg
 
+        if iter_idx > 1000:
+            # if np.random.rand() < 0.25:
+            #     xx = np.random.rand()
+            #     if xx < 1/4:
+            #         img = img[:, :int(384*0.97), :int(384*0.97)]
+            #     elif xx < 2/4:
+            #         img = img[:, -int(384*0.97):, :int(384*0.97)]
+            #     elif xx < 3/4:
+            #         img = img[:, :int(384*0.97), -int(384*0.97):]
+            #     else:
+            #         img = img[:, -int(384*0.97):, -int(384*0.97):]
+            #     img = img.unsqueeze(0)
 
-        crop_frac = 0.05
-        random_size = int(random.uniform(1.0 - crop_frac, 1.0) * img.shape[1])
-        img = kornia.augmentation.RandomCrop((random_size, random_size))(img.unsqueeze(0))
+            # else:
+            crop_frac = 0.05
+            random_size = int(random.uniform(1.0 - crop_frac, 1.0) * img.shape[1])
+            img = kornia.augmentation.RandomCrop((384, 384))(img.unsqueeze(0))
 
-        img = F.interpolate(
-            img, size=(384, 384), mode="bicubic", align_corners=False, antialias=True
-        ).squeeze(0)
+            img = F.interpolate(img, size=(384, 384), mode="bicubic", align_corners=False, antialias=True).squeeze(0)
 
         img = apply_preprocessing_torch(img)
 
@@ -370,8 +408,8 @@ def optimize_diffvg(
 
                 # pil_image = Image.fromarray((img * 255).detach().permute(1, 2, 0).cpu().numpy().astype(np.uint8)).convert("RGB")
 
-                pil_image = apply_random_crop_resize_seed(pil_image, crop_percent=0.03, seed=iter_idx)
-                pil_image = ImageProcessor(pil_image).apply().image
+                pil_image = apply_random_crop_resize_seed(pil_image, crop_percent=0.03, seed=val_idx)
+                pil_image = ImageProcessor(pil_image, crop=False).apply().image
                 vl = aesthetic_evaluator.score(image=pil_image)
                 val_loss += vl
 
@@ -396,6 +434,7 @@ def optimize_diffvg(
         
         if (iter_idx + 1) % grad_accumulation_steps == 0:
             optim_svg.step()
+            optim_svg = clamp_svg_canvas(optim_svg, width, height)
 
     # best_svg = optim_svg.write_xml()
 
@@ -421,8 +460,8 @@ def evaluate():
         tile_size=16,
         pos_x=32,
         pos_y=32,
-        num_iterations=10000,
-        validation_steps=500,
+        num_iterations=50000,
+        validation_steps=1000,
     )
 
     with open(f"output_vtracer_96_{score:.3f}.svg", "w") as f:

@@ -1,4 +1,5 @@
 import pandas as pd
+import ast
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
@@ -7,81 +8,93 @@ from functools import partial
 
 from src.scripts.data.generate_svgs import clamp_svg
 from src.score_original import VQAEvaluator, AestheticEvaluator, ImageProcessor, harmonic_mean, svg_to_png, device_0
+from src.text_to_svg import text_to_svg
 
 
 def process_row(
     row: dict,
     vqa_evaluator: VQAEvaluator,
     aesthetic_evaluator: AestheticEvaluator,
-    rng: np.random.RandomState
+    random_seed: int = 42,
+    max_questions: int = 4
 ) -> tuple[float, float, float, float, list[dict]]:
-    """
-    Process a single row: read SVG, clamp, convert to PNG, apply defenses, and compute scores.
-    Returns: (instance_score, vqa_score, aest_score, ocr_score, batched_choice_probabilities)
-    """
+
+    questions = row["question"][:max_questions]
+    choices = row["choices"][:max_questions]
+    answers = row["answer"][:max_questions]
+    
     svg_path = row["svg_path"]
+
     with open(svg_path, "r", encoding="utf-8") as f:
         svg = f.read()
-    # clamp and convert to PNG
-    clamped = clamp_svg(svg)
-    image = svg_to_png(clamped)
-    # apply defenses
-    seed = rng.randint(0, np.iinfo(np.int32).max)
-    processor = ImageProcessor(image=image, seed=seed).apply()
+
+    svg = clamp_svg(svg)
+    svg += text_to_svg("O", x_position_frac=0.75, y_position_frac=0.85, font_size=60, color=(0, 0, 0), font_path="/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf").split("\n")[1]
+    svg = svg.replace("</svg>", "") + "</svg>"
+
+    image = svg_to_png(svg)
+
+    processor = ImageProcessor(image=image, seed=random_seed, crop=False).apply()
     proc_img = processor.image.copy()
-    # aesthetic score
+
     aest_score = aesthetic_evaluator.score(proc_img)
-    # VQA score
-    vqa_score, batched_choice_probabilities = vqa_evaluator.score(
-        row["question"], row["choices"], row["answer"], proc_img, n=2
+    vqa_score, batched_choice_probabilities, logits_dict = vqa_evaluator.score(
+        questions, choices, answers, proc_img, n=len(choices)
     )
-    # OCR score
-    processor.reset().apply_random_crop_resize().apply_jpeg_compression(quality=90)
-    ocr_score = vqa_evaluator.ocr(processor.image)
-    # combined instance score
+    
+    # processor.reset().apply_random_crop_resize().apply_jpeg_compression(quality=90)
+    # ocr_score = vqa_evaluator.ocr(processor.image)
+    ocr_score = 1.0
+
     instance_score = harmonic_mean(vqa_score, aest_score, beta=0.5) * ocr_score
-    return instance_score, vqa_score, aest_score, ocr_score, batched_choice_probabilities
+
+    return instance_score, vqa_score, aest_score, ocr_score, batched_choice_probabilities, logits_dict
 
 
 def generate_scores(
     dataset_path: Path = Path("/home/mpf/code/kaggle/draw/data/vtracer/vtracer_dataset.parquet"),
     out_folder: Path = Path("/home/mpf/code/kaggle/draw/data/vtracer"),
-    max_workers: int = 1,
-    random_seed: int = 0
+    random_seed: int = 42
 ) -> None:
-    """
-    Read the generated SVG dataset, score each entry, and write a new parquet with additional columns.
-    """
-    # load dataset
-    df = pd.read_parquet(dataset_path)
-    # prepare evaluators and RNG
+    svg_df = pd.read_parquet(dataset_path)
+    svg_df = svg_df.drop_duplicates(subset=["description", "sd_seed", "prompt"])
+    svg_df = svg_df[svg_df["sd_seed"].isin([0])]
+    # svg_df = svg_df[svg_df["prompt_name"].isin(list(set(svg_df["prompt_name"]))[:2])]
+    svg_df.drop("category", axis=1, inplace=True)
+
+    questions_df = pd.read_parquet("/home/mpf/code/kaggle/draw/data/questions_groq_llama4_maverick.parquet")
+
+    df = pd.merge(svg_df, questions_df, on="description", how="left")
+
+    print(f"Merged {len(svg_df)} SVGs with {len(questions_df)} questions into {len(df)} rows")
+    print(f"Number of unique questions: {len(df['question'].unique())}")
+
+    for colname in ['question', 'choices', 'answer']:
+        df[colname] = df[colname].apply(ast.literal_eval)
+    
     vqa_evaluator = VQAEvaluator()
     aesthetic_evaluator = AestheticEvaluator(device_0)
-    rng = np.random.RandomState(random_seed)
-    # convert to records for mapping
-    rows = df.to_dict(orient="records")
-    process_func = partial(
-        process_row,
-        vqa_evaluator=vqa_evaluator,
-        aesthetic_evaluator=aesthetic_evaluator,
-        rng=rng,
-    )
-    # process in parallel (or serial if max_workers=1)
+
     results = []
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        for res in tqdm(executor.map(process_func, rows), total=len(rows)):
-            results.append(res)
-    # unpack
-    scores, vqa_scores, aest_scores, ocr_scores, batched_probs = zip(*results)
+    for _, row in tqdm(df.iterrows(), total=len(df)):
+        res = process_row(row, vqa_evaluator, aesthetic_evaluator, random_seed=random_seed, max_questions=4)
+        results.append(res)
+
+    scores, vqa_scores, aest_scores, ocr_scores, batched_probs, logits_dict = zip(*results)
     df["score"] = scores
     df["vqa_score"] = vqa_scores
     df["aest_score"] = aest_scores
     df["ocr_score"] = ocr_scores
-    df["batched_choice_probabilities"] = batched_probs
-    # save
+    df["batched_choice_probabilities"] = [repr(prob) for prob in batched_probs]
+    df["logits_dict"] = [repr(logits) for logits in logits_dict]
+    
+    for colname in ['question', 'choices', 'answer']:
+        df[colname] = df[colname].apply(repr)
+
     out_folder.mkdir(parents=True, exist_ok=True)
-    out_path = out_folder / "vtracer_dataset_with_scores.parquet"
+    out_path = out_folder / "vtracer_dataset_scores.parquet"
     df.to_parquet(out_path)
+
     print(f"Saved scored dataset to {out_path}")
 
 

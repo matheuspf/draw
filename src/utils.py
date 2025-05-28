@@ -211,6 +211,7 @@ def optimize_svg_picosvg(svg):
     return svg_instance.tostring(pretty_print=False)
 
 def optimize_svg(svg, use_picosvg=False):
+    # return svg
     if use_picosvg:
         svg = optimize_svg_picosvg(svg)
 
@@ -407,7 +408,7 @@ def create_random_svg(
     return svg
 
 
-def displace_svg_paths(svg, x_offset = 0, y_offset = 0, scale=0.5) -> str:
+def displace_svg_paths(svg, x_offset = 0, y_offset = 0, scale=1.0) -> str:
     temp_path = "/tmp/temp.svg"
     with open(temp_path, "w") as f:
         f.write(svg)

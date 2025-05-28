@@ -1,3 +1,5 @@
+#| export
+
 import ast
 import io
 import math
@@ -20,11 +22,13 @@ from transformers import (
     BitsAndBytesConfig,
     PaliGemmaForConditionalGeneration,
 )
+from tqdm import tqdm
 
 svg_constraints = kagglehub.package_import('metric/svg-constraints', bypass_confirmation=True)
 
-DEVICE_0 = f"cuda:{max(0, torch.cuda.device_count() - 2)}"
-DEVICE_1 = f"cuda:{max(0, torch.cuda.device_count() - 1)}"
+device_0 = f"cuda:{max(0, torch.cuda.device_count() - 2)}"
+device_1 = f"cuda:{max(0, torch.cuda.device_count() - 1)}"
+
 
 class ParticipantVisibleError(Exception):
     pass
@@ -61,11 +65,10 @@ def score(
     --------
     >>> import pandas as pd
     >>> solution = pd.DataFrame({
-    ...     'row_id': [0, 1],
-    ...     'id': ["abcde", "abcde"],
-    ...     'question': ["Is there a red circle?", "What shape is present?"],
-    ...     'choices': ['["yes", "no"]', '["square", "circle", "triangle", "hexagon"]'],
-    ...     'answer': ["yes", "circle"],
+    ...     'id': ["abcde"],
+    ...     'question': ['["Is there a red circle?", "What shape is present?"]'],
+    ...     'choices': ['[["yes", "no"], ["square", "circle", "triangle", "hexagon"]]'],
+    ...     'answer': ['["yes", "circle"]'],
     ... })
     >>> submission = pd.DataFrame({
     ...     'id': ["abcde"],
@@ -74,9 +77,10 @@ def score(
     >>> score(solution, submission, 'row_id', random_seed=42)
     0...
     """
-    del solution[row_id_column_name]
-    # Convert 'choices' field from str to list[str] dtype
-    solution['choices'] = solution['choices'].apply(ast.literal_eval)
+    # Convert solution fields to list dtypes and expand
+    for colname in ['question', 'choices', 'answer']:
+        solution[colname] = solution[colname].apply(ast.literal_eval)
+    solution = solution.explode(['question', 'choices', 'answer'])
 
     # Validate
     if not pd.api.types.is_string_dtype(submission.loc[:, 'svg']):
@@ -88,16 +92,21 @@ def score(
         for svg in submission.loc[:, 'svg']:
             constraints.validate_svg(svg)
     except:
+        with open("svg_error.svg", "w") as f:
+            f.write(svg)
+        print(len(svg.encode('utf-8')))
         raise ParticipantVisibleError('SVG code violates constraints.')
 
     # Score
     vqa_evaluator = VQAEvaluator()
-    aesthetic_evaluator = AestheticEvaluator()
+    aesthetic_evaluator = AestheticEvaluator(device_0)
 
     results = []
+    all_scores = []
     rng = np.random.RandomState(random_seed)
     try:
         df = solution.merge(submission, on='id')
+        pbar = tqdm(list(set(df["id"])))
         for i, (_, group) in enumerate(df.loc[
             :, ['id', 'question', 'choices', 'answer', 'svg']
         ].groupby('id')):
@@ -108,26 +117,31 @@ def score(
             svg = svg[0]  # unpack singleton from list
             group_seed = rng.randint(0, np.iinfo(np.int32).max)
             image_processor = ImageProcessor(image=svg_to_png(svg), seed=group_seed).apply()
-            image = image_processor.image
-            vqa_score = vqa_evaluator.score(questions, choices, answers, image)
-            ocr_score = vqa_evaluator.ocr(image_processor.original_image)
+            image = image_processor.image.copy()
             aesthetic_score = aesthetic_evaluator.score(image)
+            vqa_score, batched_choice_probabilities, _ = vqa_evaluator.score(questions, choices, answers, image, n=4)
+            image_processor.reset().apply_random_crop_resize().apply_jpeg_compression(quality=90)
+            ocr_score = vqa_evaluator.ocr(image_processor.image)
             instance_score = (
                 harmonic_mean(vqa_score, aesthetic_score, beta=0.5) * ocr_score
             )
             results.append(instance_score)
+            all_scores.append((instance_score, vqa_score, aesthetic_score, ocr_score, batched_choice_probabilities))
+            pbar.update(1)
 
     except:
         raise ParticipantVisibleError('SVG failed to score.')
 
     fidelity = statistics.mean(results)
-    return float(fidelity)
+    return float(fidelity), all_scores
+
 
 
 class VQAEvaluator:
     """Evaluates images based on their similarity to a given text description using multiple choice questions."""
 
-    def __init__(self):
+    def __init__(self, model_id: str = 'google/paligemma-2/transformers/paligemma2-10b-mix-448', device=device_1):
+        self.device = device
         self.quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type='nf4',
@@ -135,33 +149,31 @@ class VQAEvaluator:
             bnb_4bit_compute_dtype=torch.float16,
         )
         self.letters = string.ascii_uppercase
-        self.model_path = kagglehub.model_download(
-            'google/paligemma-2/transformers/paligemma2-10b-mix-448'
-            # 'google/paligemma-2/transformers/paligemma2-10b-mix-224'
-            # 'google/paligemma-2/transformers/paligemma2-3b-mix-224'
-            # 'google/paligemma-2/transformers/paligemma2-3b-mix-448'
-        )
+        self.model_path = kagglehub.model_download(model_id)
         self.processor = AutoProcessor.from_pretrained(self.model_path)
         self.model = PaliGemmaForConditionalGeneration.from_pretrained(
             self.model_path,
             low_cpu_mem_usage=True,
             quantization_config=self.quantization_config,
-        ).to(DEVICE_1)
+            device_map=self.device
+        ).to(self.device)
 
     def score(self, questions, choices, answers, image, n=4):
         scores = []
+        batched_choice_probabilities = []
+        logits_dict = []
         batches = (chunked(qs, n) for qs in [questions, choices, answers])
         for question_batch, choice_batch, answer_batch in zip(*batches, strict=True):
-            scores.extend(
-                self.score_batch(
-                    image,
-                    question_batch,
-                    choice_batch,
-                    answer_batch,
-                )
+            res = self.score_batch(
+                image,
+                question_batch,
+                choice_batch,
+                answer_batch,
             )
-        # print(scores)
-        return statistics.mean(scores)
+            scores.extend(res[0])
+            batched_choice_probabilities.extend(res[1])
+            logits_dict.extend(res[2])
+        return statistics.mean(scores), batched_choice_probabilities, logits_dict
 
     def score_batch(
         self,
@@ -170,7 +182,7 @@ class VQAEvaluator:
         choices_list: list[list[str]],
         answers: list[str],
     ) -> list[float]:
-        """Evaluates the image based on multiple choice questions and answers in batch.
+        """Evaluates the image based on multiple choice questions and answers.
 
         Parameters
         ----------
@@ -186,13 +198,13 @@ class VQAEvaluator:
         Returns
         -------
         list[float]
-            List of scores (values between 0 and 1) representing the probability of the correct answer for each question, multiplied by OCR score.
+            List of scores (values between 0 and 1) representing the probability of the correct answer for each question.
         """
         prompts = [
             self.format_prompt(question, choices)
             for question, choices in zip(questions, choices_list, strict=True)
         ]
-        batched_choice_probabilities = self.get_choice_probability(
+        batched_choice_probabilities, logits_dict = self.get_choice_probability(
             image, prompts, choices_list
         )
 
@@ -207,7 +219,9 @@ class VQAEvaluator:
                     break
             scores.append(answer_probability)
 
-        return scores
+        # pred_description = self.get_description(image)
+        batched_choice_probabilities = [{"question": questions[i], "choices": batched_choice_probabilities[i], "answer": answers[i], "pred_description": ""} for i in range(len(questions))]
+        return scores, batched_choice_probabilities, logits_dict
 
     def format_prompt(self, question: str, choices: list[str]) -> str:
         prompt = f'<image>answer en Question: {question}\nChoices:\n'
@@ -219,8 +233,10 @@ class VQAEvaluator:
         """Masks logits for the first token of each choice letter for each question in the batch."""
         batch_size = logits.shape[0]
         masked_logits = torch.full_like(logits, float('-inf'))
+        logits_dict_list = []
 
         for batch_idx in range(batch_size):
+            logits_dict = {}
             choices = choices_list[batch_idx]
             for i in range(len(choices)):
                 letter_token = self.letters[i]
@@ -236,12 +252,16 @@ class VQAEvaluator:
                     masked_logits[batch_idx, first_token] = logits[
                         batch_idx, first_token
                     ]
+                    logits_dict[first_token] = logits[batch_idx, first_token].item()
                 if isinstance(first_token_with_space, int):
                     masked_logits[batch_idx, first_token_with_space] = logits[
                         batch_idx, first_token_with_space
                     ]
+                    logits_dict[first_token_with_space] = logits[batch_idx, first_token_with_space].item()
+            
+            logits_dict_list.append(logits_dict)
 
-        return masked_logits
+        return masked_logits, logits_dict_list
 
     def get_choice_probability(self, image, prompts, choices_list) -> list[dict]:
         inputs = self.processor(
@@ -249,12 +269,12 @@ class VQAEvaluator:
             text=prompts,
             return_tensors='pt',
             padding='longest',
-        ).to(DEVICE_1)
+        ).to(self.device)
 
         with torch.no_grad():
             outputs = self.model(**inputs)
             logits = outputs.logits[:, -1, :]  # Logits for the last (predicted) token
-            masked_logits = self.mask_choices(logits, choices_list)
+            masked_logits, logits_dict = self.mask_choices(logits, choices_list)
             probabilities = torch.softmax(masked_logits, dim=-1)
 
         batched_choice_probabilities = []
@@ -290,7 +310,7 @@ class VQAEvaluator:
                 )
             batched_choice_probabilities.append(renormalized_probabilities)
 
-        return batched_choice_probabilities
+        return batched_choice_probabilities, logits_dict
 
     def ocr(self, image, free_chars=4):
         inputs = (
@@ -300,7 +320,7 @@ class VQAEvaluator:
                 return_tensors='pt',
             )
             .to(torch.float16)
-            .to(self.model.device)
+            .to(self.device)
         )
         input_len = inputs['input_ids'].shape[-1]
 
@@ -312,7 +332,7 @@ class VQAEvaluator:
         num_char = len(decoded)
 
         # Exponentially decreasing towards 0.0 if more than free_chars detected
-        return min(1.0, math.exp(-num_char + free_chars)), decoded
+        return min(1.0, math.exp(-num_char + free_chars))
 
 
 class AestheticPredictor(nn.Module):
@@ -335,7 +355,8 @@ class AestheticPredictor(nn.Module):
 
 
 class AestheticEvaluator:
-    def __init__(self):
+    def __init__(self, device=device_1):
+        self.device = device
         # self.model_path = '/kaggle/input/sac-logos-ava1-l14-linearmse/sac+logos+ava1-l14-linearMSE.pth'
         # self.clip_model_path = '/kaggle/input/openai-clip-vit-large-patch14/ViT-L-14.pt'
         self.model_path = str(kagglehub.model_download("jiazhuang/sac-logos-ava1-l14-linearmse/Transformers/default/1", path="sac+logos+ava1-l14-linearMSE.pth"))
@@ -344,20 +365,20 @@ class AestheticEvaluator:
 
     def load(self):
         """Loads the aesthetic predictor model and CLIP model."""
-        state_dict = torch.load(self.model_path, weights_only=True, map_location=DEVICE_1)
+        state_dict = torch.load(self.model_path, weights_only=True, map_location=self.device)
 
         # CLIP embedding dim is 768 for CLIP ViT L 14
         predictor = AestheticPredictor(768)
         predictor.load_state_dict(state_dict)
-        predictor.to(DEVICE_1)
+        predictor.to(self.device)
         predictor.eval()
-        clip_model, preprocessor = clip.load(self.clip_model_path, device=DEVICE_1)
+        clip_model, preprocessor = clip.load(self.clip_model_path, device=self.device)
 
         return predictor, clip_model, preprocessor
 
     def score(self, image: Image.Image) -> float:
         """Predicts the CLIP aesthetic score of an image."""
-        image = self.preprocessor(image).unsqueeze(0).to(DEVICE_1)
+        image = self.preprocessor(image).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
             image_features = self.clip_model.encode_image(image)
@@ -365,7 +386,7 @@ class AestheticEvaluator:
             image_features /= image_features.norm(dim=-1, keepdim=True)
             image_features = image_features.cpu().detach().numpy()
 
-        score = self.predictor(torch.from_numpy(image_features).to(DEVICE_1).float())
+        score = self.predictor(torch.from_numpy(image_features).to(self.device).float())
 
         return score.item() / 10.0  # scale to [0, 1]
 
@@ -416,8 +437,9 @@ def svg_to_png(svg_code: str, size: tuple = (384, 384)) -> Image.Image:
 
 
 class ImageProcessor:
-    def __init__(self, image: Image.Image, seed=None):
+    def __init__(self, image: Image.Image, seed=None, crop=True):
         """Initialize with either a path to an image or a PIL Image object."""
+        self.crop = crop
         self.image = image
         self.original_image = self.image.copy()
         if seed is not None:
@@ -560,10 +582,11 @@ class ImageProcessor:
 
     def apply(self):
         """Apply an ensemble of defenses."""
+        if self.crop:
+            self.apply_random_crop_resize(crop_percent=0.03)
+        
         return (
-            self \
-            # .apply_random_crop_resize(crop_percent=0.03)
-            .apply_jpeg_compression(quality=95)
+            self.apply_jpeg_compression(quality=95)
             .apply_median_filter(size=9)
             .apply_fft_low_pass(cutoff_frequency=0.5)
             .apply_bilateral_filter(d=5, sigma_color=75, sigma_space=75)

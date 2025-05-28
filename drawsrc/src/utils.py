@@ -211,7 +211,7 @@ def optimize_svg_picosvg(svg):
     return svg_instance.tostring(pretty_print=False)
 
 def optimize_svg(svg, use_picosvg=False):
-    return svg
+    # return svg
     if use_picosvg:
         svg = optimize_svg_picosvg(svg)
 
